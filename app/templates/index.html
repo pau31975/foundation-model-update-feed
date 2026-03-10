@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Provider Update Feed</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <h1>
+        <span class="logo-icon">⚡</span>
+        LLM Provider Update Feed
+      </h1>
+      <p class="subtitle">Model lifecycle events across major AI providers</p>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Filters -->
+    <section class="filters-bar">
+      <form method="get" action="/">
+        <div class="filters-row">
+          <label class="filter-group">
+            <span>Provider</span>
+            <select name="provider">
+              <option value="">All providers</option>
+              {% for p in providers %}
+              <option value="{{ p }}" {% if p == selected_provider %}selected{% endif %}>
+                {{ p | upper }}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="filter-group">
+            <span>Severity</span>
+            <select name="severity">
+              <option value="">All severities</option>
+              {% for s in severities %}
+              <option value="{{ s }}" {% if s == selected_severity %}selected{% endif %}>
+                {{ s }}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="filter-group">
+            <span>Change type</span>
+            <select name="change_type">
+              <option value="">All types</option>
+              {% for ct in change_types %}
+              <option value="{{ ct }}" {% if ct == selected_change_type %}selected{% endif %}>
+                {{ ct | replace("_", " ") | title }}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="filter-group">
+            <span>Per page</span>
+            <select name="limit">
+              {% for n in [25, 50, 100] %}
+              <option value="{{ n }}" {% if n == limit %}selected{% endif %}>{{ n }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <div class="filter-actions">
+            <button type="submit" class="btn btn-primary">Filter</button>
+            <a href="/" class="btn btn-ghost">Reset</a>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- Quick actions -->
+    <section class="actions-bar">
+      <div class="actions-row">
+        <span class="total-count">
+          {% if total == 0 %}
+            No items stored yet.
+          {% elif total == 1 %}
+            1 item
+          {% else %}
+            {{ total }} items
+          {% endif %}
+        </span>
+        <button
+          id="btn-collect"
+          class="btn btn-secondary"
+          onclick="triggerCollect()"
+        >
+          Run collectors now
+        </button>
+      </div>
+      <div id="collect-status" class="collect-status" style="display:none;"></div>
+    </section>
+
+    <!-- Feed timeline -->
+    {% if items %}
+    <ol class="feed-list" reversed>
+      {% for item in items %}
+      <li class="feed-item feed-item--{{ item.severity | lower }}">
+        <div class="feed-item__meta">
+          <span class="badge badge--provider badge--{{ item.provider }}">
+            {{ item.provider | upper }}
+          </span>
+          <span class="badge badge--severity badge--{{ item.severity | lower }}">
+            {{ item.severity }}
+          </span>
+          <span class="badge badge--change-type">
+            {{ item.change_type | replace("_", " ") | title }}
+          </span>
+          <time class="feed-item__time" datetime="{{ item.created_at.isoformat() }}">
+            {{ item.created_at.strftime("%Y-%m-%d %H:%M UTC") }}
+          </time>
+        </div>
+
+        <h2 class="feed-item__title">
+          <a href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer">
+            {{ item.title }}
+          </a>
+        </h2>
+
+        {% if item.model %}
+        <div class="feed-item__model">
+          <code>{{ item.model }}</code>
+          {% if item.effective_at %}
+          &nbsp;&mdash;&nbsp;
+          <span class="feed-item__effective">
+            effective {{ item.effective_at.strftime("%Y-%m-%d") }}
+          </span>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <p class="feed-item__summary">{{ item.summary }}</p>
+
+        <div class="feed-item__footer">
+          <span class="feed-item__product">{{ item.product }}</span>
+          {% if item.announced_at and item.announced_at != item.effective_at %}
+          <span class="feed-item__announced">
+            announced {{ item.announced_at.strftime("%Y-%m-%d") }}
+          </span>
+          {% endif %}
+          <a class="feed-item__source" href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer">
+            Source →
+          </a>
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <div class="empty-state">
+      <p>No updates found.</p>
+      <p>
+        Click <strong>Run collectors now</strong> to fetch live data, or
+        <a href="/docs" target="_blank">POST /api/updates</a> to add items manually.
+      </p>
+    </div>
+    {% endif %}
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <span>LLM Provider Update Feed &mdash; POC</span>
+      <nav>
+        <a href="/docs" target="_blank">OpenAPI docs</a>
+        <a href="/redoc" target="_blank">ReDoc</a>
+        <a href="/api/updates" target="_blank">JSON API</a>
+        <a href="/health" target="_blank">Health</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
