@@ -307,3 +307,5 @@ Each directory contains a `README.md` with deeper documentation:
 | [`app/static/README.md`](app/static/README.md) | CSS design tokens, component class reference, JS button handler |
 | [`app/templates/README.md`](app/templates/README.md) | Jinja2 template structure, context variables, filter behaviour |
 | [`tests/README.md`](tests/README.md) | Test architecture, fixture/mock strategy, coverage gaps |
+
+### Check :)
