@@ -282,3 +282,62 @@ collector_service.run_all_collectors(db)
               crud.create_update(db, item)
                    └─ INSERT … ON CONFLICT fingerprint → None (skip)
 ```
+
+---
+
+## Severity classification
+
+Severity is a three-level enum (`INFO` → `WARN` → `CRITICAL`). Each collector derives it from the `ChangeType` of the event, consistently across all providers:
+
+| `ChangeType` | `Severity` | Meaning |
+|---|---|---|
+| `RETIREMENT` | **CRITICAL** | A hard end-of-support / shutdown / retirement date is known |
+| `DEPRECATION_ANNOUNCED` | **WARN** | Model is deprecated but no hard shutdown date confirmed yet |
+| `NEW_MODEL` / `CAPABILITY_CHANGED` | **INFO** | New launch, GA announcement, or capability update |
+
+### Per-provider rules
+
+#### Google Gemini (`gemini.py`)
+
+| Condition | `ChangeType` | `Severity` |
+|---|---|---|
+| `shutdown_date` column has a value | `RETIREMENT` | **CRITICAL** |
+| Only `deprecation_date` present | `DEPRECATION_ANNOUNCED` | **WARN** |
+| Changelog entry with new-model keywords | `NEW_MODEL` | **INFO** |
+
+#### OpenAI (`openai.py`)
+
+| Condition | `ChangeType` | `Severity` |
+|---|---|---|
+| Shutdown date found in deprecation page | `RETIREMENT` | **CRITICAL** |
+| Deprecation date found (no shutdown date) | `DEPRECATION_ANNOUNCED` | **WARN** |
+| All other entries | `NEW_MODEL` / other | **INFO** |
+
+> OpenAI centralises this logic in a `_classify_severity(change_type)` helper function.
+
+#### Anthropic (`anthropic.py`)
+
+| Condition | `ChangeType` | `Severity` |
+|---|---|---|
+| Row text contains `"retired"` or `"end of support"` | `RETIREMENT` | **CRITICAL** |
+| Row text contains other deprecation keywords (`deprecated`, `legacy`, `sunset`) | `DEPRECATION_ANNOUNCED` | **WARN** |
+| Changelog entry with deprecation/retirement keywords | `DEPRECATION_ANNOUNCED` | **WARN** |
+| Changelog entry with new-model keywords | `NEW_MODEL` | **INFO** |
+
+#### Azure OpenAI (`azure.py`)
+
+| Condition | `ChangeType` | `Severity` |
+|---|---|---|
+| `retirement_date` column has a value | `RETIREMENT` | **CRITICAL** |
+| Deprecation/retirement text but no date | `DEPRECATION_ANNOUNCED` | **WARN** |
+| What's New entry with retire/deprecate keywords | `DEPRECATION_ANNOUNCED` | **WARN** |
+| What's New entry with available/launch/GA keywords | `NEW_MODEL` | **INFO** |
+
+#### AWS Bedrock (`aws.py`)
+
+| Condition | `ChangeType` | `Severity` |
+|---|---|---|
+| `end_of_support_date` column has a value | `RETIREMENT` | **CRITICAL** |
+| Only `deprecation_date` present | `DEPRECATION_ANNOUNCED` | **WARN** |
+| Deprecated row with no date at all | `DEPRECATION_ANNOUNCED` | **WARN** |
+| Doc-history entry with new-model keywords | `NEW_MODEL` | **INFO** |
