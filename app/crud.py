@@ -81,6 +81,10 @@ def list_updates(db: Session, query: FeedQuery) -> tuple[list[ModelUpdate], int]
             filters.append(ModelUpdate.created_at < cursor_dt)
         except ValueError:
             pass  # ignore malformed cursor
+    if query.major_only:
+        filters.append(
+            ModelUpdate.change_type.in_(["NEW_MODEL", "RETIREMENT", "DEPRECATION_ANNOUNCED"])
+        )
 
     if filters:
         for f in filters:
@@ -89,7 +93,10 @@ def list_updates(db: Session, query: FeedQuery) -> tuple[list[ModelUpdate], int]
 
     total: int = db.execute(count_stmt).scalar_one()
 
-    stmt = base_stmt.order_by(ModelUpdate.created_at.desc()).limit(query.limit)
+    stmt = base_stmt.order_by(
+        ModelUpdate.announced_at.desc().nulls_last(),
+        ModelUpdate.created_at.desc(),
+    ).limit(query.limit)
     rows = list(db.execute(stmt).scalars().all())
     return rows, total
 

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -76,6 +79,41 @@ class BaseCollector(ABC):
                     attempt,
                 )
         return None
+
+    def _fetch_rss(self, url: str) -> list[dict]:
+        """Fetch an RSS feed and return parsed entry dicts.
+
+        Each dict has keys: ``title``, ``link``, ``description``, and
+        ``pub_date`` (a UTC :class:`datetime` or ``None``).
+        Returns an empty list on any failure.
+        """
+        raw = self._fetch(url)
+        if not raw:
+            return []
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError as exc:
+            logger.warning("[%s] RSS parse error for %s: %s", self.provider_name, url, exc)
+            return []
+
+        entries: list[dict] = []
+        for item in root.findall(".//item"):
+            pub_str = item.findtext("pubDate")
+            pub_date = None
+            if pub_str:
+                try:
+                    pub_date = parsedate_to_datetime(pub_str).astimezone(timezone.utc)
+                except Exception:
+                    pass
+            entries.append(
+                {
+                    "title": item.findtext("title") or "",
+                    "link": item.findtext("link") or "",
+                    "description": item.findtext("description") or "",
+                    "pub_date": pub_date,
+                }
+            )
+        return entries
 
     def __del__(self) -> None:
         try:

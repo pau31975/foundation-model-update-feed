@@ -1,10 +1,12 @@
 """Azure OpenAI model update collector.
 
 Parses:
+- https://learn.microsoft.com/en-us/azure/foundry-classic/openai/whats-new
+  (new canonical What's New page with retirement announcements and new model notices)
 - https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
   (model availability table and retirement/deprecation sections)
 - https://learn.microsoft.com/en-us/azure/ai-services/openai/whats-new
-  (What's new page with retirement announcements and new model notices)
+  (legacy What's New page, still carries historical entries)
 
 Falls back to a set of known-good seed entries if live parsing yields nothing,
 so the feed always has representative data even when the docs are unreachable.
@@ -25,8 +27,9 @@ from app.schemas import ChangeType, ModelUpdateCreate, Provider, Severity
 
 logger = logging.getLogger(__name__)
 
-_MODELS_URL = settings.azure_source_urls[0]
-_WHATS_NEW_URL = settings.azure_source_urls[1]
+_WHATS_NEW_URL = settings.azure_source_urls[0]   # new canonical
+_MODELS_URL = settings.azure_source_urls[1]
+_WHATS_NEW_LEGACY_URL = settings.azure_source_urls[2]
 
 
 def _parse_date(text: str) -> datetime | None:
@@ -71,8 +74,8 @@ class AzureCollector(BaseCollector):
                 "[%s] Live parsing yielded no items – using seed data.",
                 self.provider_name,
             )
-            items = list(_SEED_ENTRIES)
-
+        # Always include seed entries; DB fingerprint deduplication handles duplicates.
+        items.extend(_SEED_ENTRIES)
         logger.info("[%s] collected %d item(s)", self.provider_name, len(items))
         return items
 
@@ -326,42 +329,110 @@ class AzureCollector(BaseCollector):
 
 
 # ---------------------------------------------------------------------------
-# Seed / fallback data – well-known Azure OpenAI model lifecycle events
+# Seed / fallback data – comprehensive Azure OpenAI model lifecycle events
 # ---------------------------------------------------------------------------
 
 _SEED_ENTRIES: list[ModelUpdateCreate] = [
+    # ── New model releases ────────────────────────────────────────────────
     ModelUpdateCreate(
         provider=Provider.azure,
         product="azure_openai",
-        model="gpt-35-turbo (0301)",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="Azure OpenAI gpt-35-turbo (0301) retired",
+        model="gpt-realtime-1.5",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="Azure OpenAI gpt-realtime-1.5 and gpt-audio-1.5 released",
         summary=(
-            "gpt-35-turbo deployment version 0301 was retired on September 30, 2024. "
-            "Deployments must be upgraded to gpt-35-turbo (0613) or gpt-4o-mini."
+            "gpt-realtime-1.5 and gpt-audio-1.5 are now available on Azure OpenAI. "
+            "Support real-time voice conversations and audio generation capabilities. "
+            "Released February 2026."
         ),
-        source_url=_MODELS_URL,
-        announced_at=datetime(2024, 7, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 9, 30, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "gpt-35-turbo-0613"},
+        source_url=_WHATS_NEW_URL,
+        announced_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        effective_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        raw={"source": "seed"},
     ),
     ModelUpdateCreate(
         provider=Provider.azure,
         product="azure_openai",
-        model="gpt-4 (0314)",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="Azure OpenAI GPT-4 (0314) retired",
+        model="gpt-5",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="Azure OpenAI GPT-5 family available",
         summary=(
-            "gpt-4 deployment version 0314 was retired on June 6, 2024. "
-            "Upgrade to gpt-4 (turbo-2024-04-09) or gpt-4o."
+            "gpt-5, gpt-5-mini, and gpt-5-nano are now available on Azure OpenAI. "
+            "Released August 2025. gpt-5 and gpt-5-mini support 1M token context windows."
         ),
-        source_url=_MODELS_URL,
-        announced_at=datetime(2024, 4, 3, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 6, 6, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "gpt-4-turbo-2024-04-09"},
+        source_url=_WHATS_NEW_URL,
+        announced_at=datetime(2025, 8, 7, tzinfo=timezone.utc),
+        effective_at=datetime(2025, 8, 7, tzinfo=timezone.utc),
+        raw={"source": "seed"},
     ),
+    ModelUpdateCreate(
+        provider=Provider.azure,
+        product="azure_openai",
+        model="gpt-5-codex",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="Azure OpenAI GPT-5 Codex available",
+        summary=(
+            "gpt-5-codex available on Azure OpenAI from September 2025. "
+            "Optimized for code generation and software engineering tasks."
+        ),
+        source_url=_WHATS_NEW_URL,
+        announced_at=datetime(2025, 9, 1, tzinfo=timezone.utc),
+        effective_at=datetime(2025, 9, 1, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.azure,
+        product="azure_openai",
+        model="gpt-4.1",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="Azure OpenAI GPT-4.1 available (1M context)",
+        summary=(
+            "gpt-4.1 released on Azure OpenAI April 2025. "
+            "Features a 1M token context window, improved instruction following, and coding. "
+            "Also available: gpt-4.1-mini and gpt-4.1-nano."
+        ),
+        source_url=_WHATS_NEW_URL,
+        announced_at=datetime(2025, 4, 14, tzinfo=timezone.utc),
+        effective_at=datetime(2025, 4, 14, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.azure,
+        product="azure_openai",
+        model="o3",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="Azure OpenAI o3 and o4-mini available",
+        summary=(
+            "o3 and o4-mini are now available on Azure OpenAI as of April 2025. "
+            "Set a new bar for math, science, coding, and visual reasoning tasks."
+        ),
+        source_url=_WHATS_NEW_URL,
+        announced_at=datetime(2025, 4, 16, tzinfo=timezone.utc),
+        effective_at=datetime(2025, 4, 16, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.azure,
+        product="azure_openai",
+        model="gpt-4o",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="Azure OpenAI GPT-4o generally available",
+        summary=(
+            "gpt-4o is generally available on Azure OpenAI from May 2024. "
+            "Multimodal model supporting text and vision at improved speed and lower cost."
+        ),
+        source_url=_WHATS_NEW_URL,
+        announced_at=datetime(2024, 5, 13, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 5, 13, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    # ── Retirements ────────────────────────────────────────────────────
     ModelUpdateCreate(
         provider=Provider.azure,
         product="azure_openai",
@@ -381,18 +452,33 @@ _SEED_ENTRIES: list[ModelUpdateCreate] = [
     ModelUpdateCreate(
         provider=Provider.azure,
         product="azure_openai",
-        model="gpt-4o",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI GPT-4o generally available",
+        model="gpt-35-turbo (0301)",
+        change_type=ChangeType.RETIREMENT,
+        severity=Severity.CRITICAL,
+        title="Azure OpenAI gpt-35-turbo (0301) retired",
         summary=(
-            "gpt-4o is now generally available on Azure OpenAI. "
-            "Multimodal model supporting text and vision inputs at improved speed "
-            "and lower cost compared to GPT-4 Turbo."
+            "gpt-35-turbo deployment version 0301 was retired on September 30, 2024. "
+            "Deployments should be upgraded to gpt-4o-mini."
         ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2024, 5, 13, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 5, 13, tzinfo=timezone.utc),
-        raw={"source": "seed"},
+        source_url=_MODELS_URL,
+        announced_at=datetime(2024, 7, 1, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 9, 30, tzinfo=timezone.utc),
+        raw={"source": "seed", "replacement": "gpt-4o-mini"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.azure,
+        product="azure_openai",
+        model="gpt-4 (0314)",
+        change_type=ChangeType.RETIREMENT,
+        severity=Severity.CRITICAL,
+        title="Azure OpenAI GPT-4 (0314) retired",
+        summary=(
+            "gpt-4 deployment version 0314 was retired on June 6, 2024. "
+            "Upgrade to gpt-4o or gpt-4.1."
+        ),
+        source_url=_MODELS_URL,
+        announced_at=datetime(2024, 4, 3, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 6, 6, tzinfo=timezone.utc),
+        raw={"source": "seed", "replacement": "gpt-4o"},
     ),
 ]

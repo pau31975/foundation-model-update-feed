@@ -5,6 +5,8 @@ Parses:
   (model lifecycle table: model ID, status, deprecation date, end-of-support date)
 - https://docs.aws.amazon.com/bedrock/latest/userguide/doc-history.html
   (document history changelog for new model announcements)
+- https://docs.aws.amazon.com/bedrock/latest/userguide/release-notes.html
+  (full release notes for model availability and retirement events)
 
 Falls back to a set of known-good seed entries if live parsing yields nothing,
 so the feed always has representative data even when the docs are unreachable.
@@ -27,6 +29,31 @@ logger = logging.getLogger(__name__)
 
 _LIFECYCLE_URL = settings.aws_source_urls[0]
 _DOC_HISTORY_URL = settings.aws_source_urls[1]
+_RELEASE_NOTES_URL = settings.aws_source_urls[2]
+_RSS_URL = settings.aws_rss_url
+
+# Filters RSS entries to only Bedrock / AI foundation model-related entries.
+_AWS_BEDROCK_RE = re.compile(
+    r"\b(bedrock|foundation\s+model|amazon\s+nova|amazon\s+titan|"
+    r"llama\s*\d|mistral\s*\d|cohere\s+command|stability\s+\w+|"
+    r"nova[-\s](?:pro|lite|micro|premier|sonic|canvas|reel))\b",
+    re.IGNORECASE,
+)
+
+# Extracts a model identifier from AWS RSS text.
+_RSS_MODEL_RE = re.compile(
+    r"\b(amazon\s+nova[-\s]\w+|amazon\s+titan[-\s]\w+|"
+    r"claude[-\s][\d.]+(?:[-\s]\w+)?|claude\s+\d+(?:\.\d+)?(?:\s+\w+)?|"
+    r"llama[-\s\d.]+[\w.-]*|mistral[-\s\w]+|nova[-\s](?:pro|lite|micro|premier)|"
+    r"titan[-\s]\w+)\b",
+    re.IGNORECASE,
+)
+# Title must contain an explicit release verb for an RSS entry to be tagged NEW_MODEL.
+_RSS_RELEASE_RE = re.compile(
+    r"\b(introduc\w*|launch\w*|releas\w*|now\s+available|generally\s+available"
+    r"|new\s+model|debut\w*|unveil\w*)\b",
+    re.IGNORECASE,
+)
 
 
 def _parse_date(text: str) -> datetime | None:
@@ -63,6 +90,7 @@ class AWSCollector(BaseCollector):
     def collect(self) -> list[ModelUpdateCreate]:
         items: list[ModelUpdateCreate] = []
 
+        items.extend(self._collect_rss())
         items.extend(self._collect_lifecycle_page())
         items.extend(self._collect_doc_history())
 
@@ -71,10 +99,66 @@ class AWSCollector(BaseCollector):
                 "[%s] Live parsing yielded no items – using seed data.",
                 self.provider_name,
             )
-            items = list(_SEED_ENTRIES)
-
+        # Always include seed entries; DB fingerprint deduplication handles duplicates.
+        items.extend(_SEED_ENTRIES)
         logger.info("[%s] collected %d item(s)", self.provider_name, len(items))
         return items
+
+    # ------------------------------------------------------------------
+    # RSS feed (live new-model auto-detection)
+    # ------------------------------------------------------------------
+
+    def _collect_rss(self) -> list[ModelUpdateCreate]:
+        """Parse AWS What's New RSS feed and extract Bedrock model entries."""
+        results: list[ModelUpdateCreate] = []
+        for entry in self._fetch_rss(_RSS_URL):
+            text = f"{entry['title']} {entry['description']}"
+            if not _AWS_BEDROCK_RE.search(text):
+                continue
+
+            m = _RSS_MODEL_RE.search(text)
+            model_name = m.group(1).strip() if m else None
+
+            # Skip entries that have no specific model match and no Bedrock in title
+            # (avoids generic AWS service announcements that mention Bedrock tangentially)
+            if not model_name and not re.search(r"\bbedrock\b", entry["title"], re.IGNORECASE):
+                continue
+
+            if re.search(
+                r"\b(deprecat|retire|end.of.?support|end.of.?life|sunset)\b",
+                text, re.IGNORECASE,
+            ):
+                change_type = ChangeType.DEPRECATION_ANNOUNCED
+                severity = Severity.WARN
+            elif model_name and _RSS_RELEASE_RE.search(entry["title"]):
+                change_type = ChangeType.NEW_MODEL
+                severity = Severity.INFO
+            else:
+                # Bedrock service/feature updates — not a new foundation model
+                change_type = ChangeType.CAPABILITY_CHANGED
+                severity = Severity.INFO
+
+            title = (entry["title"] or "AWS Bedrock announcement")[:256]
+            source_url = entry["link"] if entry["link"].startswith("http") else _RSS_URL
+            try:
+                results.append(
+                    ModelUpdateCreate(
+                        provider=Provider.aws,
+                        product="aws_bedrock",
+                        model=model_name,
+                        change_type=change_type,
+                        severity=severity,
+                        title=title,
+                        summary=(entry["description"] or title)[:512],
+                        source_url=source_url,
+                        announced_at=entry["pub_date"],
+                        effective_at=None,
+                        raw={"source": "rss", "feed": _RSS_URL},
+                    )
+                )
+            except Exception as exc:
+                logger.debug("[%s] Skipping RSS entry %r: %s", self.provider_name, title, exc)
+        return results
 
     # ------------------------------------------------------------------
     # Model lifecycle page
@@ -364,26 +448,95 @@ class AWSCollector(BaseCollector):
 
 
 # ---------------------------------------------------------------------------
-# Seed / fallback data – well-known AWS Bedrock model lifecycle events
+# Seed / fallback data – comprehensive AWS Bedrock model lifecycle events
 # ---------------------------------------------------------------------------
 
 _SEED_ENTRIES: list[ModelUpdateCreate] = [
+    # ── New model releases ────────────────────────────────────────────────
     ModelUpdateCreate(
         provider=Provider.aws,
         product="aws_bedrock",
-        model="anthropic.claude-v2",
+        model="amazon.nova-pro-v1:0",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="AWS Bedrock Amazon Nova Pro available",
+        summary=(
+            "amazon.nova-pro-v1:0 is available on AWS Bedrock. "
+            "Amazon Nova Pro is a highly capable multimodal model for complex enterprise "
+            "tasks with an optimal accuracy-to-speed tradeoff. Released December 3, 2024."
+        ),
+        source_url=_DOC_HISTORY_URL,
+        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.aws,
+        product="aws_bedrock",
+        model="amazon.nova-lite-v1:0",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="AWS Bedrock Amazon Nova Lite available",
+        summary=(
+            "amazon.nova-lite-v1:0 is available on AWS Bedrock. "
+            "Nova Lite is a very low-cost multimodal model fast enough for real-time applications. "
+            "Released December 3, 2024."
+        ),
+        source_url=_DOC_HISTORY_URL,
+        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.aws,
+        product="aws_bedrock",
+        model="amazon.nova-micro-v1:0",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="AWS Bedrock Amazon Nova Micro available",
+        summary=(
+            "amazon.nova-micro-v1:0 is available on AWS Bedrock. "
+            "Nova Micro is a text-only model delivering the lowest latency and cost in the Nova family. "
+            "Released December 3, 2024."
+        ),
+        source_url=_DOC_HISTORY_URL,
+        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    ModelUpdateCreate(
+        provider=Provider.aws,
+        product="aws_bedrock",
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        change_type=ChangeType.NEW_MODEL,
+        severity=Severity.INFO,
+        title="AWS Bedrock Claude 3.5 Sonnet v2 available",
+        summary=(
+            "anthropic.claude-3-5-sonnet-20241022-v2:0 is available on AWS Bedrock. "
+            "Upgraded Claude 3.5 Sonnet with improved coding, reasoning, and computer use "
+            "(beta). Released October 2024."
+        ),
+        source_url=_DOC_HISTORY_URL,
+        announced_at=datetime(2024, 10, 22, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 10, 22, tzinfo=timezone.utc),
+        raw={"source": "seed"},
+    ),
+    # ── Retirements & deprecations ────────────────────────────────────────
+    ModelUpdateCreate(
+        provider=Provider.aws,
+        product="aws_bedrock",
+        model="anthropic.claude-v2:1",
         change_type=ChangeType.RETIREMENT,
         severity=Severity.CRITICAL,
-        title="AWS Bedrock Claude 2 (anthropic.claude-v2) retired",
+        title="AWS Bedrock Claude 2.1 (anthropic.claude-v2:1) retired",
         summary=(
-            "anthropic.claude-v2 on AWS Bedrock reached end of support on August 1, 2024. "
-            "Customers should migrate to anthropic.claude-3-haiku-20240307-v1:0 or "
-            "anthropic.claude-3-5-sonnet-20240620-v1:0."
+            "anthropic.claude-v2:1 on AWS Bedrock reached end of support on March 1, 2025. "
+            "Migrate to anthropic.claude-3-5-sonnet-20241022-v2:0 or amazon.nova-pro-v1:0."
         ),
         source_url=_LIFECYCLE_URL,
-        announced_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 8, 1, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "anthropic.claude-3-haiku-20240307-v1:0"},
+        announced_at=datetime(2024, 11, 1, tzinfo=timezone.utc),
+        effective_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        raw={"source": "seed", "replacement": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
     ),
     ModelUpdateCreate(
         provider=Provider.aws,
@@ -391,7 +544,7 @@ _SEED_ENTRIES: list[ModelUpdateCreate] = [
         model="anthropic.claude-instant-v1",
         change_type=ChangeType.RETIREMENT,
         severity=Severity.CRITICAL,
-        title="AWS Bedrock Claude Instant (anthropic.claude-instant-v1) retired",
+        title="AWS Bedrock Claude Instant v1 retired",
         summary=(
             "anthropic.claude-instant-v1 on AWS Bedrock reached end of support "
             "on September 30, 2024. Migrate to anthropic.claude-3-haiku-20240307-v1:0."
@@ -404,39 +557,17 @@ _SEED_ENTRIES: list[ModelUpdateCreate] = [
     ModelUpdateCreate(
         provider=Provider.aws,
         product="aws_bedrock",
-        model="anthropic.claude-v2:1",
-        change_type=ChangeType.DEPRECATION_ANNOUNCED,
-        severity=Severity.WARN,
-        title="AWS Bedrock Claude 2.1 (anthropic.claude-v2:1) deprecated",
+        model="anthropic.claude-v2",
+        change_type=ChangeType.RETIREMENT,
+        severity=Severity.CRITICAL,
+        title="AWS Bedrock Claude 2 (anthropic.claude-v2) retired",
         summary=(
-            "anthropic.claude-v2:1 on AWS Bedrock has been deprecated with "
-            "end-of-support scheduled for March 1, 2025. "
-            "Upgrade to anthropic.claude-3-5-sonnet-20241022-v2:0 or "
-            "anthropic.claude-3-haiku-20240307-v1:0."
+            "anthropic.claude-v2 on AWS Bedrock reached end of support on August 1, 2024. "
+            "Migrate to anthropic.claude-3-haiku-20240307-v1:0 or later."
         ),
         source_url=_LIFECYCLE_URL,
-        announced_at=datetime(2024, 11, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
-        raw={
-            "source": "seed",
-            "replacement": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        },
-    ),
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="amazon.nova-pro-v1:0",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="AWS Bedrock Amazon Nova Pro available",
-        summary=(
-            "amazon.nova-pro-v1:0 is now available on AWS Bedrock. "
-            "Amazon Nova Pro is a highly capable multimodal model for complex "
-            "enterprise tasks with an optimal accuracy-to-speed tradeoff."
-        ),
-        source_url=_DOC_HISTORY_URL,
-        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        raw={"source": "seed"},
+        announced_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        effective_at=datetime(2024, 8, 1, tzinfo=timezone.utc),
+        raw={"source": "seed", "replacement": "anthropic.claude-3-haiku-20240307-v1:0"},
     ),
 ]

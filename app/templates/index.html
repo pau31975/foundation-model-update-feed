@@ -25,10 +25,11 @@
     <!-- Filters -->
     <section class="filters-bar">
       <form method="get" action="/">
+        {% if major_only %}<input type="hidden" name="major_only" value="true" />{% endif %}
         <div class="filters-row">
           <label class="filter-group">
             <span>Provider</span>
-            <select name="provider">
+            <select name="provider" onchange="this.form.submit()">
               <option value="">All providers</option>
               {% for p in providers %}
               <option value="{{ p }}" {% if p == selected_provider %}selected{% endif %}>
@@ -40,7 +41,7 @@
 
           <label class="filter-group">
             <span>Severity</span>
-            <select name="severity">
+            <select name="severity" onchange="this.form.submit()">
               <option value="">All severities</option>
               {% for s in severities %}
               <option value="{{ s }}" {% if s == selected_severity %}selected{% endif %}>
@@ -52,7 +53,7 @@
 
           <label class="filter-group">
             <span>Change type</span>
-            <select name="change_type">
+            <select name="change_type" onchange="this.form.submit()">
               <option value="">All types</option>
               {% for ct in change_types %}
               <option value="{{ ct }}" {% if ct == selected_change_type %}selected{% endif %}>
@@ -64,15 +65,22 @@
 
           <label class="filter-group">
             <span>Per page</span>
-            <select name="limit">
+            <select name="limit" onchange="this.form.submit()">
               {% for n in [25, 50, 100] %}
               <option value="{{ n }}" {% if n == limit %}selected{% endif %}>{{ n }}</option>
               {% endfor %}
             </select>
           </label>
 
+          <label class="filter-group filter-group--toggle">
+            <span>View</span>
+            <a
+              href="?provider={{ selected_provider }}&severity={{ selected_severity }}&change_type={{ selected_change_type }}&limit={{ limit }}{% if not major_only %}&major_only=true{% endif %}"
+              class="btn {% if major_only %}btn-primary{% else %}btn-ghost{% endif %} toggle-major"
+            >&#9889; Major only</a>
+          </label>
+
           <div class="filter-actions">
-            <button type="submit" class="btn btn-primary">Filter</button>
             <a href="/" class="btn btn-ghost">Reset</a>
           </div>
         </div>
@@ -117,9 +125,11 @@
           <span class="badge badge--change-type">
             {{ item.change_type | replace("_", " ") | title }}
           </span>
-          <time class="feed-item__time" datetime="{{ item.created_at.isoformat() }}">
-            {{ item.created_at.strftime("%Y-%m-%d %H:%M UTC") }}
+          {% if item.announced_at %}
+          <time class="feed-item__time" datetime="{{ item.announced_at.isoformat() }}">
+            Announced {{ item.announced_at.strftime("%Y-%m-%d") }}
           </time>
+          {% endif %}
         </div>
 
         <h2 class="feed-item__title">
@@ -144,11 +154,6 @@
 
         <div class="feed-item__footer">
           <span class="feed-item__product">{{ item.product }}</span>
-          {% if item.announced_at and item.announced_at != item.effective_at %}
-          <span class="feed-item__announced">
-            announced {{ item.announced_at.strftime("%Y-%m-%d") }}
-          </span>
-          {% endif %}
           <a class="feed-item__source" href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer">
             Source →
           </a>

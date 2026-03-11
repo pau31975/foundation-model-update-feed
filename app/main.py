@@ -146,6 +146,7 @@ def index(
     severity: Optional[str] = None,
     change_type: Optional[str] = None,
     limit: int = Query(default=50, ge=1, le=200),
+    major_only: bool = Query(default=False),
 ) -> HTMLResponse:
     """Render the main feed page."""
     query = FeedQuery(
@@ -153,6 +154,7 @@ def index(
         severity=Severity(severity) if severity else None,
         change_type=ChangeType(change_type) if change_type else None,
         limit=limit,
+        major_only=major_only,
     )
     rows, total = crud.list_updates(db, query)
     items = [ModelUpdateRead.model_validate(r) for r in rows]
@@ -170,6 +172,7 @@ def index(
             "selected_provider": provider or "",
             "selected_severity": severity or "",
             "selected_change_type": change_type or "",
+            "major_only": major_only,
         },
     )
 

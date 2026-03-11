@@ -166,6 +166,7 @@ class FeedQuery(BaseModel):
     since: Optional[datetime] = None
     limit: int = Field(50, ge=1, le=200)
     cursor: Optional[str] = None  # opaque: last seen created_at ISO string
+    major_only: bool = False  # show only NEW_MODEL, RETIREMENT, DEPRECATION_ANNOUNCED with severity WARN/CRITICAL
 
 
 # ---------------------------------------------------------------------------
