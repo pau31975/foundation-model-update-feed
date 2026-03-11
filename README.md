@@ -142,10 +142,11 @@ curl "http://localhost:8000/api/updates?limit=10&cursor=2024-06-01T12:00:00Z"
 | `provider`    | string   | `google` \| `openai` \| `anthropic` \| `azure` \| `aws` |
 | `severity`    | string   | `INFO` \| `WARN` \| `CRITICAL`                   |
 | `change_type` | string   | `NEW_MODEL` \| `DEPRECATION_ANNOUNCED` \| `RETIREMENT` \| `SHUTDOWN_DATE_CHANGED` \| `CAPABILITY_CHANGED` |
-| `since`       | datetime | ISO 8601 – only return items created after this  |
-| `major_only`  | bool     | `true` – show only `NEW_MODEL`, `RETIREMENT`, `DEPRECATION_ANNOUNCED` |
+| `since`       | datetime | ISO 8601 – only return items after this timestamp |
 | `limit`       | int      | 1–200, default 50                                 |
 | `cursor`      | string   | Opaque pagination cursor from previous response   |
+
+> **Note:** The `major_only` filter (show only NEW_MODEL / RETIREMENT / DEPRECATION_ANNOUNCED) is available exclusively through the **web UI** (`GET /`). The JSON API always returns items of all change types unless you filter with `change_type`.
 
 ### `POST /api/updates` — create an item manually
 
@@ -199,6 +200,51 @@ docker compose up --build
 The service will be available at **http://localhost:8000**.
 
 SQLite data persists in `./data/` on your host.
+
+---
+
+## Makefile targets
+
+| Target | Description |
+|---|---|
+| `make sync` / `make install` | Install all dependencies via `uv sync` |
+| `make dev` | Run the development server with auto-reload on `127.0.0.1:8000` |
+| `make run` | Run the production-like server (no reload) |
+| `make test` | Run all tests with `pytest -v` |
+| `make lint` | Run `ruff` linter over `app/` and `tests/` |
+| `make collect` | `curl -X POST http://localhost:8000/api/collect` (server must be running) |
+| `make docker-build` | Build the Docker image |
+| `make docker-up` | Start service detached via Docker Compose |
+| `make docker-down` | Stop and remove containers |
+| `make docker-logs` | Follow container logs |
+| `make clean` | Remove `__pycache__`, `.pyc`, `.pytest_cache`, `htmlcov`, `.coverage` |
+| `make help` | Print all targets with descriptions |
+
+---
+
+## Configuration reference
+
+All settings live in `app/config.py` as a `pydantic-settings` `BaseSettings` class. Override any value with an environment variable of the same name (case-insensitive) or in a `.env` file.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///./data/updates.db` | SQLAlchemy database URL |
+| `HOST` | `127.0.0.1` | Uvicorn bind address |
+| `PORT` | `8000` | Uvicorn port |
+| `RELOAD` | `True` | Enable auto-reload (dev only) |
+| `LOG_LEVEL` | `info` | Python logging level |
+| `COLLECTOR_TIMEOUT_SECONDS` | `30` | HTTP request timeout for collectors |
+| `COLLECTOR_MAX_RETRIES` | `2` | Extra retry attempts (total = max_retries + 2) |
+| `DEFAULT_PAGE_LIMIT` | `50` | Default items per page |
+| `MAX_PAGE_LIMIT` | `200` | Maximum allowed limit |
+| `GEMINI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog]` URLs for Gemini |
+| `OPENAI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog]` URLs for OpenAI |
+| `ANTHROPIC_SOURCE_URLS` | JSON array | `[models, release-notes/api (unused), model-deprecations (unused)]` |
+| `AZURE_SOURCE_URLS` | JSON array | `[whats-new (foundry-classic), models, whats-new-legacy (unused)]` |
+| `AWS_SOURCE_URLS` | JSON array | `[model-lifecycle, doc-history, release-notes (unused)]` |
+| `OPENAI_RSS_URL` | `https://openai.com/blog/rss.xml` | OpenAI blog RSS feed |
+| `GOOGLE_RSS_URL` | `https://blog.google/products/gemini/rss/` | Google Gemini blog RSS feed |
+| `AWS_RSS_URL` | `https://aws.amazon.com/about-aws/whats-new/recent/feed/` | AWS What's New RSS feed |
 
 ```bash
 # Trigger collection inside the running container

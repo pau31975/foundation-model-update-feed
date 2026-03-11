@@ -77,16 +77,20 @@ run_all_collectors(db)
       │             └─ crud.create_update(db, item3) → ModelUpdate (added)
       │
       ├─► AnthropicCollector()
-      │        └─ .collect() → [item4, ...]  (HTML scraping)
+      │        └─ .collect() → [item4, ...]  (models page + changelog)
       │             └─ crud.create_update(db, item4) → ModelUpdate (added)
       │
       ├─► AzureCollector()
-      │        └─ .collect() → [item5, ...]  (HTML + seeds)
-      │             └─ crud.create_update(db, item5) → ModelUpdate (added)
+      │        └─ .collect() → [live items...] + _SEED_ENTRIES (always)
+      │             └─ crud.create_update(db, item) → ModelUpdate or None (dup)
       │
       └─► AWSCollector()
-               └─ .collect() → [item6, ...]  (RSS + HTML + seeds)
-                    └─ crud.create_update(db, item6) → ModelUpdate (added)
+               └─ .collect() → [live items...] + _SEED_ENTRIES (always)
+                    └─ crud.create_update(db, item) → ModelUpdate or None (dup)
+
+             Note: Azure and AWS always append _SEED_ENTRIES on top of
+             live results. Fingerprint deduplication silently skips seeds
+             that were already stored in a previous run.
                     │
                     ▼
            CollectResult(added=2, skipped=1, errors=[])

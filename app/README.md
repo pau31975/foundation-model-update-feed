@@ -36,7 +36,8 @@ Browser
         │
         ▼
     crud.list_updates(db, query)
-        │  SELECT … FROM model_updates WHERE … ORDER BY created_at DESC
+        │  SELECT … FROM model_updates WHERE …
+        │  ORDER BY announced_at DESC NULLS LAST, created_at DESC
         │
         ▼
     Jinja2 TemplateResponse("index.html", context)
@@ -55,6 +56,8 @@ Client
         ▼
     main.py — route handler
         │  validates query params → FeedQuery
+        │  (provider, severity, change_type, since, limit, cursor)
+        │  Note: major_only is NOT exposed by this endpoint
         │
         ▼
     crud.list_updates(db, query)  →  (rows, total)
@@ -167,7 +170,7 @@ Fields are normalised (lowercased / stripped), joined with `|`, then hashed. The
 
 ## Configuration
 
-All settings are loaded once at import time by `config.py` into a module-level `settings` singleton. Values are read from environment variables or a `.env` file (via `pydantic-settings`). See the [root README](../README.md#configuration-reference) for the full list of variables.
+All settings are loaded once at import time by `config.py` into a module-level `settings` singleton. Values are read from environment variables or a `.env` file (via `pydantic-settings`). See the [root README](../README.md#configuration-reference) for the full list of configurable variables.
 
 ---
 

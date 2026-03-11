@@ -50,8 +50,11 @@ All design tokens are declared as CSS variables so the entire palette can be cha
 | Variable | Value | Meaning |
 |---|---|---|
 | `--clr-critical` | `#dc2626` (red-600) | Retirements, outages |
+| `--clr-critical-bg` | `#fef2f2` (red-50) | CRITICAL card/badge background |
 | `--clr-warn` | `#d97706` (amber-600) | Deprecation announcements |
+| `--clr-warn-bg` | `#fffbeb` (amber-50) | WARN card/badge background |
 | `--clr-info` | `#2563eb` (blue-600) | New models, capability changes |
+| `--clr-info-bg` | `#eff6ff` (blue-50) | INFO badge background |
 
 **Provider colours** (used in badges)
 | Variable | Provider |
@@ -77,6 +80,8 @@ All design tokens are declared as CSS variables so the entire palette can be cha
 | `.site-header` | White top bar with bottom border; contains the `<h1>` and subtitle |
 | `.filters-bar` | White card containing the filter `<form>` |
 | `.filter-group` | Vertical `label + select` unit with uppercased label |
+| `.filter-group--toggle` | Modifier on the Major only toggle label (no extra styles; semantic only) |
+| `.total-count` | Muted text showing total item count in the actions row |
 | `.actions-bar` / `.actions-row` | Space-between row with item count and button |
 | `.collect-status` | Inline status message below the action row |
 | `.collect-status--ok` | Green variant (success) |
@@ -91,15 +96,20 @@ All design tokens are declared as CSS variables so the entire palette can be cha
 | `.feed-item--warn` | Amber left border |
 | `.feed-item--info` | Blue left border |
 | `.feed-item__meta` | Badge row at the top of each card |
-| `.feed-item__time` | Timestamp, right-aligned in meta row |
-| `.feed-item__title` | `<h2>` with link to source |
-| `.feed-item__model` | `<code>` model ID + effective date |
+| `.feed-item__time` | Announced date timestamp, right-aligned in meta row |
+| `.feed-item__title` | `<h2>` with link to source URL |
+| `.feed-item__model` | `<code>` model ID row |
+| `.feed-item__effective` | Effective date span inside `.feed-item__model` |
 | `.feed-item__summary` | Body paragraph |
-| `.feed-item__footer` | Footer row with product, announced date, source link |
+| `.feed-item__footer` | Footer row with product name and source link |
+| `.feed-item__source` | Right-aligned "Source →" link in the footer |
 | `.badge` | Pill badge base (full border-radius) |
 | `.badge--{provider}` | Provider-specific colour (google, openai, anthropic, azure, aws) |
-| `.badge--{severity}` | Severity colour (critical, warn, info) |
+| `.badge--critical` / `.badge--warn` / `.badge--info` | Severity-specific colour — applied as `badge--{{ item.severity \| lower }}` |
+| `.logo-icon` | Inline `⚡` span in the site header |
 | `.badge--change-type` | Neutral gray for change type label |
+| `.filter-group--toggle` | Modifier on the Major only toggle label (semantic only) |
+| `.filter-actions` | Right-aligned flex row: Reset link inside the filters bar |
 | `.empty-state` | Centred placeholder shown when no items match the filters |
 | `.site-footer` | White bottom bar with doc links |
 
@@ -111,21 +121,17 @@ A single `@media (max-width: 640px)` rule stacks the filter row, footer nav, and
 
 ## `app.js`
 
-Contains one function: `triggerCollect()`, called by the **Run collectors now** button's `onclick` attribute.
+### `app.js` — `triggerCollect()`
 
-### What it does
+The single exported function `triggerCollect()` is called by the `onclick` handler of the `#btn-collect` button.
 
-1. Disables the button and shows a loading message in `#collect-status`.
-2. `POST /api/collect` (no body).
-3. Parses the JSON response:
-   - **Success:** Displays `"Done — added X, skipped Y duplicate(s)."` with a green status style. If any items were added, reloads the page after 1.2 seconds so the new feed entries appear.
-   - **HTTP error:** Displays the status code and error body with a red status style.
-   - **Network error:** Displays the JavaScript error message with a red status style.
-4. Always re-enables the button in the `finally` block.
-
-### How it is loaded
-
-`templates/index.html` includes `<script src="/static/app.js"></script>` at the bottom of `<body>` (after the DOM is parsed).
+**Sequence:**
+1. Disables `#btn-collect` and shows `#collect-status` with a "please wait" message.
+2. `POST /api/collect` — awaits the `CollectResult` JSON response.
+3. On success: shows `added N, skipped M duplicate(s)` in `.collect-status--ok`. If `added > 0`, auto-reloads the page after **1.2 seconds** so the new items appear.
+4. On HTTP error (non-2xx): shows the status code and response body in `.collect-status--error`.
+5. On network error (`fetch` throws): shows the error message in `.collect-status--error`.
+6. Always re-enables `#btn-collect` in `finally`.
 
 ### CSS classes used by `app.js`
 

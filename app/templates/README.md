@@ -39,7 +39,9 @@ A server-rendered HTML page that displays the model lifecycle feed. It is return
      │   │         Severity select   (populated from `severities`)
      │   │         Change type select(populated from `change_types`)
      │   │         Per page select   (25 / 50 / 100)
-     │   │         [Filter] button   [Reset] link
+     │   │         [⚡ Major only] toggle link  (inside .filter-group--toggle)
+     │   │         [Reset] link  (inside .filter-actions)
+     │   │         Note: selects auto-submit via onchange — no Filter button
      │   │
      │   ├─ <section .actions-bar>
      │   │       Shows total item count
@@ -51,11 +53,12 @@ A server-rendered HTML page that displays the model lifecycle feed. It is return
      │   │     {% for item in items %}
      │   │       <li .feed-item .feed-item--{severity}>
      │   │         .feed-item__meta    provider badge, severity badge,
-     │   │                             change-type badge, timestamp
+     │   │                             change-type badge,
+     │   │                             announced_at <time> (if present, right-aligned)
      │   │         .feed-item__title   linked to source_url
-     │   │         .feed-item__model   <code>model</code> + effective date
+     │   │         .feed-item__model   <code>model</code> + .feed-item__effective date
      │   │         .feed-item__summary paragraph
-     │   │         .feed-item__footer  product, announced date, Source link
+     │   │         .feed-item__footer  product name + .feed-item__source ("Source →" link)
      │   │     {% endfor %}
      │   │
      │   └─ {% else %}
@@ -80,9 +83,9 @@ These are passed from the `GET /` route handler in `main.py` via `TemplateRespon
 | `providers` | `list[str]` | All `Provider` enum values (`google`, `openai`, …) for the dropdown |
 | `severities` | `list[str]` | All `Severity` enum values (`INFO`, `WARN`, `CRITICAL`) |
 | `change_types` | `list[str]` | All `ChangeType` enum values |
-| `selected_provider` | `str \| None` | Currently active provider filter (preserves dropdown state) |
-| `selected_severity` | `str \| None` | Currently active severity filter |
-| `selected_change_type` | `str \| None` | Currently active change type filter |
+| `selected_provider` | `str` | Currently active provider filter — empty string `""` when unset |
+| `selected_severity` | `str` | Currently active severity filter — empty string `""` when unset |
+| `selected_change_type` | `str` | Currently active change type filter — empty string `""` when unset |
 | `major_only` | `bool` | Whether the Major only filter is active — passed back to preserve toggle state |
 
 ---
@@ -99,11 +102,11 @@ These are passed from the `GET /` route handler in `main.py` via `TemplateRespon
 
 ## Filter form behaviour
 
-The filter `<form>` uses `method="get"` and `action="/"`. Submitting the form appends the selected values as query parameters (e.g. `/?provider=openai&severity=CRITICAL&limit=25`). The `GET /` route reads these parameters, passes them back in the context, and each `<option>` checks `{% if value == selected_value %}selected{% endif %}` to preserve the dropdown state across page loads.
+The filter `<form>` uses `method="get"` and `action="/"`. There is **no explicit submit button** — every `<select>` has `onchange="this.form.submit()"` so the form is submitted instantly when a dropdown value changes. The `GET /` route reads params, passes them back in the context, and each `<option>` checks `{% if value == selected_value %}selected{% endif %}` to preserve dropdown state across page loads.
 
-The **⚡ Major only** toggle is a link-button outside the form. When active it appends `major_only=true` to the current URL, filtering results to `NEW_MODEL`, `RETIREMENT`, and `DEPRECATION_ANNOUNCED` only (hiding `CAPABILITY_CHANGED`). The button uses `.btn-primary` when active and `.btn-ghost` when inactive.
+The **⚡ Major only** toggle is a link (`.filter-group--toggle`) rendered inside the filter bar but outside the form. It constructs its `href` by preserving the current provider/severity/change_type/limit params and toggling `major_only=true` / removing it. When active it uses `.btn-primary`; when inactive it uses `.btn-ghost`. Filtering to major-only shows only `NEW_MODEL`, `RETIREMENT`, and `DEPRECATION_ANNOUNCED` entries.
 
-Clicking **Reset** navigates to `/` (no query parameters), which shows all items with the default limit.
+Clicking **Reset** navigates to `/` (no query parameters), showing all items with the default limit (50).
 
 ---
 
