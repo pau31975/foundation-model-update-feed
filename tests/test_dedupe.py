@@ -220,15 +220,16 @@ class TestGeminiCollectorParsing:
         assert item.effective_at.year == 2025
         assert item.effective_at.month == 2
 
-    def test_returns_seed_data_when_fetch_fails(self) -> None:
-        from app.collectors.gemini import GeminiCollector, _SEED_ENTRIES
+    def test_returns_empty_when_fetch_fails(self) -> None:
+        from app.collectors.gemini import GeminiCollector
 
         collector = GeminiCollector()
 
-        with patch.object(collector, "_fetch", return_value=None):
+        with patch.object(collector, "_fetch", return_value=None), \
+             patch.object(collector, "_fetch_rss", return_value=[]):
             items = collector.collect()
 
-        assert items == _SEED_ENTRIES
+        assert items == []
 
 
 class TestOpenAICollectorParsing:
@@ -257,12 +258,13 @@ class TestOpenAICollectorParsing:
         assert item.provider == Provider.openai
         assert item.change_type == ChangeType.RETIREMENT
 
-    def test_returns_seed_data_when_fetch_fails(self) -> None:
-        from app.collectors.openai import OpenAICollector, _SEED_ENTRIES
+    def test_returns_empty_when_fetch_fails(self) -> None:
+        from app.collectors.openai import OpenAICollector
 
         collector = OpenAICollector()
 
-        with patch.object(collector, "_fetch", return_value=None):
+        with patch.object(collector, "_fetch", return_value=None), \
+             patch.object(collector, "_fetch_rss", return_value=[]):
             items = collector.collect()
 
-        assert items == _SEED_ENTRIES
+        assert items == []

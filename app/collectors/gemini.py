@@ -40,6 +40,11 @@ _RSS_RELEASE_RE = re.compile(
     r"|new\s+model|debut\w*|unveil\w*)\b",
     re.IGNORECASE,
 )
+# A model name followed by a version number in the title strongly signals a new model post.
+_RSS_MODEL_VERSION_RE = re.compile(
+    r"^(gemini|nano\s+banana|lyria|veo|imagen)\s+\d+(\.\d+)?\b",
+    re.IGNORECASE,
+)
 
 
 def _parse_date(text: str) -> datetime | None:
@@ -79,8 +84,6 @@ class GeminiCollector(BaseCollector):
         items.extend(self._collect_deprecations())
         items.extend(self._collect_changelog())
 
-        # Always include seed entries; DB fingerprint deduplication handles duplicates.
-        items.extend(_SEED_ENTRIES)
         logger.info("[%s] collected %d item(s)", self.provider_name, len(items))
         return items
 
@@ -109,7 +112,8 @@ class GeminiCollector(BaseCollector):
             ):
                 change_type = ChangeType.DEPRECATION_ANNOUNCED
                 severity = Severity.WARN
-            elif model_name and _RSS_RELEASE_RE.search(entry["title"]):
+            elif _RSS_RELEASE_RE.search(entry["title"]) or _RSS_MODEL_VERSION_RE.search(entry["title"]):
+                # Explicit release verb OR title starts with ModelName Version
                 change_type = ChangeType.NEW_MODEL
                 severity = Severity.INFO
             else:
@@ -327,207 +331,3 @@ class GeminiCollector(BaseCollector):
             return None
         val = cells[idx].strip()
         return val if val else None
-
-
-# ---------------------------------------------------------------------------
-# Seed / fallback data – comprehensive Google Gemini lifecycle events
-# ---------------------------------------------------------------------------
-
-# _SEED_ENTRIES: list[ModelUpdateCreate] = [
-#     # ── New model releases ────────────────────────────────────────────────
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-3.1-pro-preview",
-#         change_type=ChangeType.NEW_MODEL,
-#         severity=Severity.INFO,
-#         title="Gemini 3.1 Pro Preview released – newest Gemini model",
-#         summary=(
-#             "gemini-3.1-pro-preview released February 19, 2026. "
-#             "Next-generation frontier model with improved reasoning, code generation, "
-#             "and multimodal capabilities over Gemini 3 Pro."
-#         ),
-#         source_url=_MODELS_URL,
-#         announced_at=datetime(2026, 2, 19, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 2, 19, tzinfo=timezone.utc),
-#         raw={"source": "seed"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-3-flash-preview",
-#         change_type=ChangeType.NEW_MODEL,
-#         severity=Severity.INFO,
-#         title="Gemini 3 Flash Preview released",
-#         summary=(
-#             "gemini-3-flash-preview released December 17, 2025. "
-#             "Fast, multimodal model in the Gemini 3 family for high-throughput workloads."
-#         ),
-#         source_url=_MODELS_URL,
-#         announced_at=datetime(2025, 12, 17, tzinfo=timezone.utc),
-#         effective_at=datetime(2025, 12, 17, tzinfo=timezone.utc),
-#         raw={"source": "seed"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-2.5-pro",
-#         change_type=ChangeType.NEW_MODEL,
-#         severity=Severity.INFO,
-#         title="Gemini 2.5 Pro and Flash released",
-#         summary=(
-#             "gemini-2.5-pro and gemini-2.5-flash released June 17, 2025. "
-#             "Gemini 2.5 Pro is Google's most advanced reasoning model with 2M token context. "
-#             "Built-in thinking mode for complex problem solving."
-#         ),
-#         source_url=_MODELS_URL,
-#         announced_at=datetime(2025, 6, 17, tzinfo=timezone.utc),
-#         effective_at=datetime(2025, 6, 17, tzinfo=timezone.utc),
-#         raw={"source": "seed"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-2.0-flash",
-#         change_type=ChangeType.NEW_MODEL,
-#         severity=Severity.INFO,
-#         title="Gemini 2.0 Flash generally available",
-#         summary=(
-#             "gemini-2.0-flash generally available February 5, 2025. "
-#             "Improved performance and lower latency over 1.5 Flash with native tool use."
-#         ),
-#         source_url=_CHANGELOG_URL,
-#         announced_at=datetime(2025, 2, 5, tzinfo=timezone.utc),
-#         effective_at=datetime(2025, 2, 5, tzinfo=timezone.utc),
-#         raw={"source": "seed"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-3-pro-preview",
-#         change_type=ChangeType.NEW_MODEL,
-#         severity=Severity.INFO,
-#         title="Gemini 3 Pro Preview released",
-#         summary=(
-#             "gemini-3-pro-preview released November 18, 2025. "
-#             "Frontier preview model in the Gemini 3 family ahead of the stable release."
-#         ),
-#         source_url=_MODELS_URL,
-#         announced_at=datetime(2025, 11, 18, tzinfo=timezone.utc),
-#         effective_at=datetime(2025, 11, 18, tzinfo=timezone.utc),
-#         raw={"source": "seed"},
-#     ),
-#     # ── Deprecations & retirements ────────────────────────────────────────
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-3-pro-preview",
-#         change_type=ChangeType.RETIREMENT,
-#         severity=Severity.CRITICAL,
-#         title="Gemini 3 Pro Preview shut down",
-#         summary=(
-#             "gemini-3-pro-preview was deprecated February 26, 2026 and shut down "
-#             "March 9, 2026. Migrate to gemini-3.1-pro-preview."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2026, 2, 26, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 3, 9, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-3.1-pro-preview"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-2.5-pro",
-#         change_type=ChangeType.DEPRECATION_ANNOUNCED,
-#         severity=Severity.WARN,
-#         title="Gemini 2.5 Pro deprecated (shutdown June 2026)",
-#         summary=(
-#             "gemini-2.5-pro deprecated June 17, 2025 with shutdown scheduled for "
-#             "June 17, 2026. Migrate to gemini-3.1-pro-preview."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2025, 6, 17, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-3.1-pro-preview"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-2.5-flash",
-#         change_type=ChangeType.DEPRECATION_ANNOUNCED,
-#         severity=Severity.WARN,
-#         title="Gemini 2.5 Flash deprecated (shutdown June 2026)",
-#         summary=(
-#             "gemini-2.5-flash deprecated June 17, 2025 with shutdown scheduled for "
-#             "June 17, 2026. Migrate to gemini-3-flash-preview."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2025, 6, 17, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-3-flash-preview"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-2.0-flash",
-#         change_type=ChangeType.DEPRECATION_ANNOUNCED,
-#         severity=Severity.WARN,
-#         title="Gemini 2.0 Flash deprecated (shutdown June 2026)",
-#         summary=(
-#             "gemini-2.0-flash deprecated February 5, 2025 with shutdown scheduled for "
-#             "June 1, 2026. Migrate to gemini-2.5-flash."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2025, 2, 5, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-2.5-flash"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-2.0-flash-lite",
-#         change_type=ChangeType.DEPRECATION_ANNOUNCED,
-#         severity=Severity.WARN,
-#         title="Gemini 2.0 Flash-Lite deprecated (shutdown June 2026)",
-#         summary=(
-#             "gemini-2.0-flash-lite deprecated February 25, 2025 with shutdown scheduled for "
-#             "June 1, 2026. Migrate to gemini-2.5-flash-lite."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2025, 2, 25, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-2.5-flash-lite"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="text-embedding-004",
-#         change_type=ChangeType.RETIREMENT,
-#         severity=Severity.CRITICAL,
-#         title="text-embedding-004 retired",
-#         summary=(
-#             "text-embedding-004 was deprecated April 9, 2024 and shut down January 14, 2026. "
-#             "Migrate to gemini-embedding-001."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2024, 4, 9, tzinfo=timezone.utc),
-#         effective_at=datetime(2026, 1, 14, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-embedding-001"},
-#     ),
-#     ModelUpdateCreate(
-#         provider=Provider.google,
-#         product="gemini_api",
-#         model="gemini-1.0-pro",
-#         change_type=ChangeType.RETIREMENT,
-#         severity=Severity.CRITICAL,
-#         title="Gemini 1.0 Pro retired",
-#         summary=(
-#             "gemini-1.0-pro and gemini-1.0-pro-001 shut down February 15, 2025. "
-#             "Migrate to gemini-2.0-flash or later."
-#         ),
-#         source_url=_DEPRECATIONS_URL,
-#         announced_at=datetime(2024, 9, 19, tzinfo=timezone.utc),
-#         effective_at=datetime(2025, 2, 15, tzinfo=timezone.utc),
-#         raw={"source": "seed", "replacement": "gemini-2.0-flash"},
-#     ),
-# ]
