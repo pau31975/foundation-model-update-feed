@@ -33,12 +33,12 @@ llm-provider-update-feed/
 │   ├── services/              # Orchestration layer  ← app/services/README.md
 │   │   └── collector_service.py   # Runs all collectors, persists results
 │   ├── collectors/            # Per-provider scrapers  ← app/collectors/README.md
-│   │   ├── base.py            # Abstract BaseCollector
-│   │   ├── gemini.py          # Google Gemini (live + seed fallback)
-│   │   ├── openai.py          # OpenAI (live + seed fallback)
-│   │   ├── anthropic.py       # Anthropic Claude (live + seed fallback)
-│   │   ├── azure.py           # Azure OpenAI (live + seed fallback)
-│   │   └── aws.py             # AWS Bedrock (live + seed fallback)
+│   │   ├── base.py            # Abstract BaseCollector + shared RSS helper
+│   │   ├── gemini.py          # Google Gemini (RSS + HTML scraping)
+│   │   ├── openai.py          # OpenAI (RSS + HTML scraping)
+│   │   ├── anthropic.py       # Anthropic Claude (HTML scraping)
+│   │   ├── azure.py           # Azure OpenAI (HTML scraping + seed fallback)
+│   │   └── aws.py             # AWS Bedrock (RSS + HTML scraping + seed fallback)
 │   ├── templates/             # Jinja2 templates  ← app/templates/README.md
 │   │   └── index.html         # Server-rendered feed page
 │   └── static/                # CSS + JS assets  ← app/static/README.md
@@ -98,6 +98,7 @@ The server starts at **http://127.0.0.1:8000**.
 Open **http://127.0.0.1:8000** in your browser.
 
 - Use the dropdowns to filter by provider, severity, or change type.
+- Click **⚡ Major only** to show only new-model releases, retirements, and deprecation announcements (hides general capability updates).
 - Click **Run collectors now** to fetch live data from provider docs.
 - Items are colour-coded: red = CRITICAL, amber = WARN, blue = INFO.
 
@@ -142,6 +143,7 @@ curl "http://localhost:8000/api/updates?limit=10&cursor=2024-06-01T12:00:00Z"
 | `severity`    | string   | `INFO` \| `WARN` \| `CRITICAL`                   |
 | `change_type` | string   | `NEW_MODEL` \| `DEPRECATION_ANNOUNCED` \| `RETIREMENT` \| `SHUTDOWN_DATE_CHANGED` \| `CAPABILITY_CHANGED` |
 | `since`       | datetime | ISO 8601 – only return items created after this  |
+| `major_only`  | bool     | `true` – show only `NEW_MODEL`, `RETIREMENT`, `DEPRECATION_ANNOUNCED` |
 | `limit`       | int      | 1–200, default 50                                 |
 | `cursor`      | string   | Opaque pagination cursor from previous response   |
 

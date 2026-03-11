@@ -83,6 +83,7 @@ These are passed from the `GET /` route handler in `main.py` via `TemplateRespon
 | `selected_provider` | `str \| None` | Currently active provider filter (preserves dropdown state) |
 | `selected_severity` | `str \| None` | Currently active severity filter |
 | `selected_change_type` | `str \| None` | Currently active change type filter |
+| `major_only` | `bool` | Whether the Major only filter is active — passed back to preserve toggle state |
 
 ---
 
@@ -99,6 +100,8 @@ These are passed from the `GET /` route handler in `main.py` via `TemplateRespon
 ## Filter form behaviour
 
 The filter `<form>` uses `method="get"` and `action="/"`. Submitting the form appends the selected values as query parameters (e.g. `/?provider=openai&severity=CRITICAL&limit=25`). The `GET /` route reads these parameters, passes them back in the context, and each `<option>` checks `{% if value == selected_value %}selected{% endif %}` to preserve the dropdown state across page loads.
+
+The **⚡ Major only** toggle is a link-button outside the form. When active it appends `major_only=true` to the current URL, filtering results to `NEW_MODEL`, `RETIREMENT`, and `DEPRECATION_ANNOUNCED` only (hiding `CAPABILITY_CHANGED`). The button uses `.btn-primary` when active and `.btn-ghost` when inactive.
 
 Clicking **Reset** navigates to `/` (no query parameters), which shows all items with the default limit.
 

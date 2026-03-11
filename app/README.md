@@ -93,11 +93,11 @@ Client / Browser
         ▼
     main.py → services.collector_service.run_all_collectors(db)
         │
-        ├─► GeminiCollector.collect()   → list[ModelUpdateCreate]
-        ├─► OpenAICollector.collect()   → list[ModelUpdateCreate]
-        ├─► AnthropicCollector.collect() → [] (stub)
-        ├─► AzureCollector.collect()    → [] (stub)
-        └─► AWSCollector.collect()      → [] (stub)
+        ├─► GeminiCollector.collect()    → list[ModelUpdateCreate]  (RSS + HTML)
+        ├─► OpenAICollector.collect()    → list[ModelUpdateCreate]  (RSS + HTML)
+        ├─► AnthropicCollector.collect() → list[ModelUpdateCreate]  (HTML)
+        ├─► AzureCollector.collect()     → list[ModelUpdateCreate]  (HTML + seeds)
+        └─► AWSCollector.collect()       → list[ModelUpdateCreate]  (RSS + HTML + seeds)
               │
               ▼  for each item:
         crud.create_update(db, item)   — dedup via fingerprint

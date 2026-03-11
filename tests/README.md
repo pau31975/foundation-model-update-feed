@@ -96,7 +96,7 @@ A minimal `<table>` with one data row:
 | Test | What it verifies |
 |---|---|
 | `test_parses_table_row` | Returns 1 item; `model="gemini-1.0-pro"`, `provider=Provider.google`, `change_type=RETIREMENT`, `severity=CRITICAL`, `effective_at` = 2025-02 |
-| `test_returns_seed_data_when_fetch_fails` | When `_fetch` returns `None`, `collect()` returns the module-level `_SEED_ENTRIES` list |
+| `test_returns_empty_when_fetch_fails` | When both `_fetch` and `_fetch_rss` return `None`/`[]`, `collect()` returns `[]` (no seed fallback) |
 
 ---
 
@@ -113,7 +113,7 @@ A `<dl>` with one `<dt>`/`<dd>` pair:
 | Test | What it verifies |
 |---|---|
 | `test_parses_definition_list` | Returns 1 item; `model="gpt-4-0314"`, `provider=Provider.openai`, `change_type=RETIREMENT` |
-| `test_returns_seed_data_when_fetch_fails` | When `_fetch` returns `None`, `collect()` returns `_SEED_ENTRIES` |
+| `test_returns_empty_when_fetch_fails` | When both `_fetch` and `_fetch_rss` return `None`/`[]`, `collect()` returns `[]` (no seed fallback) |
 
 ---
 

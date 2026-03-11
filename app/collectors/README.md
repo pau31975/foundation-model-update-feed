@@ -9,26 +9,26 @@ Collectors are responsible for fetching, parsing, and returning structured model
 | File | Role |
 |---|---|
 | `__init__.py` | Package marker, no logic |
-| `base.py` | Abstract `BaseCollector` — shared HTTP client, retry logic |
-| `gemini.py` | Google Gemini — live scraping + seed fallback (implemented) |
-| `openai.py` | OpenAI — live scraping + seed fallback (implemented) |
-| `anthropic.py` | Anthropic Claude — live scraping + seed fallback (implemented) |
-| `azure.py` | Azure OpenAI — live scraping + seed fallback (implemented) |
-| `aws.py` | AWS Bedrock — live scraping + seed fallback (implemented) |
+| `base.py` | Abstract `BaseCollector` — shared HTTP client, retry logic, RSS helper |
+| `gemini.py` | Google Gemini — RSS feed + HTML scraping (live) |
+| `openai.py` | OpenAI — RSS feed + HTML scraping (live) |
+| `anthropic.py` | Anthropic Claude — HTML scraping (live) |
+| `azure.py` | Azure OpenAI — HTML scraping + seed fallback |
+| `aws.py` | AWS Bedrock — RSS feed + HTML scraping + seed fallback |
 
 ---
 
 ## Collector status
 
-| Provider | Status | Data source |
+| Provider | Data source(s) | Seed fallback? |
 |---|---|---|
-| Google Gemini | Live + seed fallback | `ai.google.dev/gemini-api/docs/deprecations`, `ai.google.dev/gemini-api/docs/changelog` |
-| OpenAI | Live + seed fallback | `platform.openai.com/docs/deprecations` |
-| Anthropic | Live + seed fallback | `docs.anthropic.com/en/docs/about-claude/models/all-models`, `docs.anthropic.com/en/release-notes/api` |
-| Azure OpenAI | Live + seed fallback | `learn.microsoft.com/…/openai/concepts/models`, `learn.microsoft.com/…/openai/whats-new` |
-| AWS Bedrock | Live + seed fallback | `docs.aws.amazon.com/bedrock/…/model-lifecycle.html`, `docs.aws.amazon.com/bedrock/…/doc-history.html` |
+| Google Gemini | `blog.google/…/gemini/rss/` (RSS), `ai.google.dev/gemini-api/docs/deprecations`, `ai.google.dev/gemini-api/docs/changelog` | No |
+| OpenAI | `openai.com/news/rss.xml` (RSS), `platform.openai.com/docs/deprecations`, `platform.openai.com/docs/changelog` | No |
+| Anthropic | `platform.claude.com/docs/en/about-claude/models/all-models`, `platform.claude.com/docs/en/release-notes/overview`, `platform.claude.com/docs/en/about-claude/model-deprecations` | No |
+| Azure OpenAI | `learn.microsoft.com/…/openai/concepts/models`, `learn.microsoft.com/…/openai/whats-new` | Yes (`_SEED_ENTRIES`) |
+| AWS Bedrock | `aws.amazon.com/about-aws/whats-new/recent/feed/` (RSS), `docs.aws.amazon.com/bedrock/…/model-lifecycle.html`, `docs.aws.amazon.com/bedrock/…/doc-history.html` | Yes (`_SEED_ENTRIES`) |
 
-> **Seed fallback:** if a live collector's HTTP fetch returns nothing (network error, JS rendering wall, unexpected HTML structure), it automatically falls back to a curated list of hardcoded known events (`_SEED_ENTRIES`) so the feed always has representative data.
+> **Seed fallback (Azure & AWS only):** if all HTTP fetches return nothing, these two collectors fall back to a curated list of hardcoded known events (`_SEED_ENTRIES`). Google Gemini, OpenAI, and Anthropic collectors return an empty list on failure — no fallback data.
 
 ---
 
@@ -44,6 +44,7 @@ All collectors inherit from `BaseCollector(ABC)`.
 | `__init__()` | Creates an `httpx.Client` with timeout, redirect following, and a descriptive `User-Agent` |
 | `collect()` | **Abstract.** Must return `list[ModelUpdateCreate]`. Must not raise — catch all exceptions internally. |
 | `_fetch(url)` | Shared HTTP GET helper. Retries up to `settings.collector_max_retries + 2` times. Returns the response body as a string, or `None` if all attempts fail. |
+| `_fetch_rss(url)` | Fetches an RSS feed and returns a list of parsed entry dicts. Each dict has keys: `title`, `link`, `description`, `pub_date` (UTC `datetime` or `None`). Returns `[]` on any failure. Used by GeminiCollector, OpenAICollector, and AWSCollector. |
 | `__del__()` | Closes the httpx client when the collector is garbage collected. |
 
 ### Retry behaviour
@@ -54,12 +55,13 @@ All collectors inherit from `BaseCollector(ABC)`.
 
 ## `gemini.py` — GeminiCollector
 
-Scrapes two Google Gemini documentation pages.
+Scrapes the Google Gemini blog RSS feed and two documentation pages.
 
 ### Data sources
 
 | URL | What it provides |
 |---|---|
+| `blog.google/products-and-platforms/products/gemini/rss/` | RSS feed — new model announcements and product updates |
 | `ai.google.dev/gemini-api/docs/deprecations` | HTML table of deprecated/retired models with dates and replacements |
 | `ai.google.dev/gemini-api/docs/changelog` | Dated changelog entries that mention new or changed models |
 
@@ -80,6 +82,17 @@ Scrapes two Google Gemini documentation pages.
 3. Extract Gemini model names with a regex.
 4. Emit `ChangeType.NEW_MODEL` / `Severity.INFO` items.
 
+### Parsing strategy — RSS feed
+
+1. Call `self._fetch_rss(_RSS_URL)` to get the Google blog RSS entries.
+2. Skip items with no Gemini model name and no AI/model keyword.
+3. Classify each entry:
+   - Keywords `deprecat`, `retire`, `shutdown`, `sunset`, `end-of-life` → `DEPRECATION_ANNOUNCED` / `WARN`.
+   - `_RSS_RELEASE_RE` match (explicit release verbs: `introducing`, `launched`, `released`, `now available`, etc.) **or** `_RSS_MODEL_VERSION_RE` match (title starts with `ModelName VersionNumber`, e.g. `Gemini 3.1 Flash-Lite: …`) → `NEW_MODEL` / `INFO`.
+   - Everything else → `CAPABILITY_CHANGED` / `INFO`.
+
+`_RSS_MODEL_VERSION_RE` catches Google's common blog title pattern for model launches that don't use explicit release verbs.
+
 ### `_parse_date` helper
 
 Tries these formats in order: `%B %d, %Y`, `%b %d, %Y`, `%Y-%m-%d`, `%d %B %Y`, `%d %b %Y`, then falls back to a `YYYY-MM-DD` regex extraction. Always returns a timezone-aware UTC `datetime` or `None`.
@@ -88,13 +101,26 @@ Tries these formats in order: `%B %d, %Y`, `%b %d, %Y`, `%Y-%m-%d`, `%d %B %Y`, 
 
 ## `openai.py` — OpenAICollector
 
-Scrapes the OpenAI deprecations documentation page.
+Scrapes the OpenAI blog RSS feed and the OpenAI deprecations/changelog documentation pages.
 
-### Data source
+### Data sources
 
-`platform.openai.com/docs/deprecations`
+| URL | What it provides |
+|---|---|
+| `openai.com/news/rss.xml` | RSS feed — model releases, feature launches, deprecation notices |
+| `platform.openai.com/docs/deprecations` | HTML page listing all deprecated/retired models with dates |
+| `platform.openai.com/docs/changelog` | Dated changelog entries for new model and capability releases |
 
-### Parsing strategy
+### Parsing strategy — RSS feed
+
+1. Call `self._fetch_rss(_RSS_URL)` to get the OpenAI news RSS entries.
+2. Skip items with no recognised model name and no model/API keyword.
+3. Classify each entry:
+   - Keywords `deprecat`, `retire`, `shutdown`, `sunset`, `end-of-life` → `DEPRECATION_ANNOUNCED` / `WARN`.
+   - `_RSS_RELEASE_RE` match (explicit release verbs) → `NEW_MODEL` / `INFO`.
+   - Everything else → `CAPABILITY_CHANGED` / `INFO`.
+
+### Parsing strategy — deprecations page
 
 Two strategies are tried in order; the first that returns results is used.
 
@@ -114,14 +140,17 @@ Two strategies are tried in order; the first that returns results is used.
 
 ## `anthropic.py` — AnthropicCollector
 
-Scrapes two Anthropic documentation pages.
+Scrapes two Anthropic documentation pages. There is no seed fallback — if fetches fail, the collector returns an empty list.
 
 ### Data sources
 
 | URL | What it provides |
 |---|---|
-| `docs.anthropic.com/en/docs/about-claude/models/all-models` | Model table with status; deprecated/retired rows contain end-of-support info |
-| `docs.anthropic.com/en/release-notes/api` | Dated API release notes with new model announcements |
+| `platform.claude.com/docs/en/about-claude/models/all-models` | Model table with status; deprecated/retired rows contain end-of-support info |
+| `platform.claude.com/docs/en/release-notes/overview` | Dated changelog entries (h3 date headings) with new model announcements |
+| `platform.claude.com/docs/en/about-claude/model-deprecations` | Deprecation schedule and end-of-support dates |
+
+> **Note:** `_CHANGELOG_URL` is hardcoded to `platform.claude.com/docs/en/release-notes/overview` (the final redirect target). The config value `anthropic_source_urls[1]` formerly pointed to `/release-notes/api` which redirects to a different page with no live data.
 
 ### Parsing strategy — models page
 
@@ -130,9 +159,9 @@ Scrapes two Anthropic documentation pages.
 3. For each row, check cell text for keywords: `deprecated`, `legacy`, `end of support`, `retired`, `sunset`.
 4. Classify: `retired` / `end of support` → `RETIREMENT` / `CRITICAL`; otherwise `DEPRECATION_ANNOUNCED` / `WARN`.
 
-### Parsing strategy — release notes
+### Parsing strategy — release notes (changelog)
 
-1. Walk `<h2>`/`<h3>`/`<h4>` headings; try to parse each heading as a date.
+1. Walk `<h2>`/`<h3>`/`<h4>` headings; try to parse each heading as a date (e.g. `"February 17, 2026"`).
 2. Aggregate sibling text until the next heading of the same level.
 3. Filter sections mentioning Claude model names or keywords (`new model`, `launch`, `available`).
 4. Extract model name via `claude[-\s][\w\-\.]+` regex.
@@ -212,24 +241,35 @@ from app.schemas import ChangeType, ModelUpdateCreate, Provider, Severity
 
 logger = logging.getLogger(__name__)
 
+_RSS_URL = "https://provider.com/blog/rss.xml"
 _SOURCE_URL = "https://provider.com/docs/changelog"
 
 class MyProviderCollector(BaseCollector):
     provider_name = "myprovider"
 
     def collect(self) -> list[ModelUpdateCreate]:
+        items: list[ModelUpdateCreate] = []
+        items.extend(self._collect_rss())
+        items.extend(self._collect_changelog())
+        return items
+
+    def _collect_rss(self) -> list[ModelUpdateCreate]:
+        results: list[ModelUpdateCreate] = []
+        for entry in self._fetch_rss(_RSS_URL):
+            # classify & build ModelUpdateCreate from entry ...
+            pass
+        return results
+
+    def _collect_changelog(self) -> list[ModelUpdateCreate]:
         html = self._fetch(_SOURCE_URL)
         if not html:
-            return _SEED_ENTRIES   # fallback if fetch fails
-
+            return []   # return empty list on failure — no seed fallback
         items: list[ModelUpdateCreate] = []
         # parse html with BeautifulSoup ...
         return items
-
-_SEED_ENTRIES: list[ModelUpdateCreate] = [
-    # hardcoded known events as fallback
-]
 ```
+
+> **No seed fallback needed.** Return an empty list `[]` when a fetch fails. The DB fingerprint deduplication layer handles subsequent successful fetches with no duplicates.
 
 ### 2. Register in the collector service
 
@@ -274,6 +314,8 @@ collector_service.run_all_collectors(db)
       ├─ instantiate MyCollector()         ← __init__ creates httpx.Client
       │
       ├─ items = MyCollector.collect()
+      │       ├─ self._fetch_rss(rss_url)  ← HTTP GET → RSS XML parse
+      │       │     └─ returns list[entry dict]
       │       └─ self._fetch(url)          ← HTTP GET with retries
       │             └─ BeautifulSoup parse
       │             └─ returns list[ModelUpdateCreate]

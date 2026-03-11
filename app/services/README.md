@@ -77,13 +77,16 @@ run_all_collectors(db)
       │             └─ crud.create_update(db, item3) → ModelUpdate (added)
       │
       ├─► AnthropicCollector()
-      │        └─ .collect() → [] (stub, no items)
+      │        └─ .collect() → [item4, ...]  (HTML scraping)
+      │             └─ crud.create_update(db, item4) → ModelUpdate (added)
       │
       ├─► AzureCollector()
-      │        └─ .collect() → [] (stub)
+      │        └─ .collect() → [item5, ...]  (HTML + seeds)
+      │             └─ crud.create_update(db, item5) → ModelUpdate (added)
       │
       └─► AWSCollector()
-               └─ .collect() → [] (stub)
+               └─ .collect() → [item6, ...]  (RSS + HTML + seeds)
+                    └─ crud.create_update(db, item6) → ModelUpdate (added)
                     │
                     ▼
            CollectResult(added=2, skipped=1, errors=[])
