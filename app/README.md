@@ -1,193 +1,116 @@
-# `app/` — Application Package
+# app/
 
-This is the main Python package for the **LLM Provider Update Feed** service. It contains all server-side logic: the FastAPI application, database layer, Pydantic schemas, CRUD operations, provider collectors, and the Jinja2 web UI.
-
----
-
-## File map
-
-| File | Role |
-|---|---|
-| `__init__.py` | Package marker, no logic |
-| `config.py` | All configuration via environment variables / `.env` |
-| `db.py` | SQLAlchemy engine, session factory, `Base`, table init |
-| `models.py` | ORM model — the `model_updates` table |
-| `schemas.py` | Pydantic validation, enums, fingerprint computation |
-| `crud.py` | Database read/write operations |
-| `main.py` | FastAPI app, all routes, lifespan hooks, logging setup |
-| `collectors/` | Per-provider HTML scrapers (see [`collectors/README.md`](collectors/README.md)) |
-| `services/` | Collector orchestration (see [`services/README.md`](services/README.md)) |
-| `static/` | CSS stylesheet and JavaScript (see [`static/README.md`](static/README.md)) |
-| `templates/` | Jinja2 HTML template (see [`templates/README.md`](templates/README.md)) |
+The core application package. Built with FastAPI + SQLAlchemy (SQLite) + Pydantic v2.
 
 ---
 
-## System flow
+## Files
 
-### Web UI request (`GET /`)
+### `main.py`
+Application entry point. Defines all HTTP routes, wires dependencies, and configures structured logging via `structlog`.
 
-```
-Browser
-  └─► GET / ?provider=openai&severity=CRITICAL
-        │
-        ▼
-    main.py — route handler
-        │  builds FeedQuery from query-string params
-        │
-        ▼
-    crud.list_updates(db, query)
-        │  SELECT … FROM model_updates WHERE …
-        │  ORDER BY announced_at DESC NULLS LAST, created_at DESC
-        │
-        ▼
-    Jinja2 TemplateResponse("index.html", context)
-        │  injects items, total, enum lists, selected filters
-        │
-        ▼
-    Browser renders feed timeline
-```
+- **Lifespan:** calls `init_db()` on startup to create DB tables.
+- **`DBDep`** — reusable `Annotated[Session, Depends(get_db)]` dependency.
+- Mounts `app/static/` at `/static` and uses Jinja2 for the `templates/` directory.
 
-### JSON API request (`GET /api/updates`)
+**Routes:**
 
-```
-Client
-  └─► GET /api/updates ?provider=…&cursor=…
-        │
-        ▼
-    main.py — route handler
-        │  validates query params → FeedQuery
-        │  (provider, severity, change_type, since, limit, cursor)
-        │  Note: major_only is NOT exposed by this endpoint
-        │
-        ▼
-    crud.list_updates(db, query)  →  (rows, total)
-        │
-        ▼
-    ModelUpdateRead.model_validate(row) for each row
-        │
-        ▼
-    FeedPage { items, total, limit, next_cursor } JSON
-```
-
-### Manual item creation (`POST /api/updates`)
-
-```
-Client
-  └─► POST /api/updates  { body: ModelUpdateCreate }
-        │
-        ▼
-    Pydantic validates body
-        │  computes fingerprint (SHA-256)
-        │
-        ▼
-    crud.create_update(db, item)
-        │  INSERT INTO model_updates … ON CONFLICT (fingerprint) → skipped
-        │
-        ├─ new row  →  201 ModelUpdateRead
-        └─ duplicate →  409 Conflict
-```
-
-### Collector trigger (`POST /api/collect`)
-
-```
-Client / Browser
-  └─► POST /api/collect
-        │
-        ▼
-    main.py → services.collector_service.run_all_collectors(db)
-        │
-        ├─► GeminiCollector.collect()    → list[ModelUpdateCreate]  (RSS + HTML)
-        ├─► OpenAICollector.collect()    → list[ModelUpdateCreate]  (RSS + HTML)
-        ├─► AnthropicCollector.collect() → list[ModelUpdateCreate]  (HTML)
-        ├─► AzureCollector.collect()     → list[ModelUpdateCreate]  (HTML + seeds)
-        └─► AWSCollector.collect()       → list[ModelUpdateCreate]  (RSS + HTML + seeds)
-              │
-              ▼  for each item:
-        crud.create_update(db, item)   — dedup via fingerprint
-              │
-              ▼
-        CollectResult { added, skipped, errors }
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/` | Server-rendered feed UI (major events only) |
+| `GET` | `/api/updates` | Paginated JSON feed with filters |
+| `POST` | `/api/updates` | Manually create a feed item |
+| `POST` | `/api/collect` | Trigger all collectors |
 
 ---
 
-## Module dependency graph
+### `config.py`
+All settings loaded from environment variables or `.env` via `pydantic-settings` (`BaseSettings`).
 
-```
-config.py ◄── db.py ──────────► models.py
-    ▲              │                  │
-    │              ▼                  ▼
-    └───── main.py ──► crud.py ──► schemas.py
-               │                      ▲
-               ▼                      │
-    services/collector_service.py     │
-               │                      │
-               ▼                      │
-    collectors/base.py ◄──────────────┘
-               ▲
-    ┌──────────┴──────────┐
- gemini.py  openai.py  anthropic.py  azure.py  aws.py
-```
+Key groups:
+- **Server:** `HOST`, `PORT`, `RELOAD`, `LOG_LEVEL`
+- **Database:** `DATABASE_URL` (default: `sqlite:///./data/updates.db`)
+- **Collector tuning:** `COLLECTOR_TIMEOUT_SECONDS`, `COLLECTOR_MAX_RETRIES`
+- **Pagination:** `DEFAULT_PAGE_LIMIT`, `MAX_PAGE_LIMIT`
+- **Source URLs:** `GEMINI_SOURCE_URLS`, `OPENAI_SOURCE_URLS`, `ANTHROPIC_SOURCE_URLS`, `AZURE_SOURCE_URLS`, `AWS_SOURCE_URLS` — each overridable as a JSON array env var
+- **RSS feeds:** `OPENAI_RSS_URL`, `GOOGLE_RSS_URL`, `AWS_RSS_URL`
 
 ---
 
-## Data model — `model_updates` table
-
-Defined in `models.py` as the `ModelUpdate` ORM class.
+### `models.py`
+SQLAlchemy ORM definition for the `model_updates` table.
 
 | Column | Type | Notes |
-|---|---|---|
-| `id` | `VARCHAR(36)` PK | UUID v4, auto-generated |
-| `provider` | `VARCHAR(32)` | `google`, `openai`, `anthropic`, `azure`, `aws` |
-| `product` | `VARCHAR(64)` | e.g. `openai_api`, `gemini_api` |
-| `model` | `VARCHAR(128)` nullable | Specific model ID, e.g. `gpt-4-0314` |
-| `change_type` | `VARCHAR(64)` | `NEW_MODEL`, `DEPRECATION_ANNOUNCED`, `RETIREMENT`, etc. |
-| `severity` | `VARCHAR(16)` | `INFO`, `WARN`, `CRITICAL` |
-| `title` | `VARCHAR(256)` | Human-readable event headline |
-| `summary` | `TEXT` | Description of the change |
-| `source_url` | `VARCHAR(1024)` | Link to official docs page |
-| `announced_at` | `DATETIME(tz)` nullable | Date announced by provider |
-| `effective_at` | `DATETIME(tz)` nullable | Date the change takes effect |
-| `raw` | `TEXT` nullable | JSON blob of raw parsed data |
-| `created_at` | `DATETIME(tz)` | Set at insert time (`datetime.now(UTC)`) |
-| `fingerprint` | `VARCHAR(64)` UNIQUE | SHA-256 deduplication key |
+|--------|------|-------|
+| `id` | `String(36)` | UUID primary key |
+| `provider` | `String(32)` | Indexed |
+| `product` | `String(64)` | e.g. `gemini_api`, `aws_bedrock` |
+| `model` | `String(128)` | Nullable, indexed |
+| `change_type` | `String(64)` | Indexed |
+| `severity` | `String(16)` | Indexed |
+| `title` | `String(256)` | |
+| `summary` | `Text` | |
+| `source_url` | `String(1024)` | |
+| `announced_at` | `DateTime(tz)` | Nullable |
+| `effective_at` | `DateTime(tz)` | Nullable |
+| `raw` | `Text` | JSON-serialized raw collector output |
+| `created_at` | `DateTime(tz)` | Auto-set to UTC now |
+| `fingerprint` | `String(64)` | SHA-256, unique — enforces deduplication |
 
-**Indexes:** `provider`, `model`, `change_type`, `severity`, `created_at`, `(provider, severity)`, and a unique index on `fingerprint`.
-
----
-
-## Deduplication
-
-Every `ModelUpdateCreate` computes a **SHA-256 fingerprint** in `schemas.py`:
-
-```python
-compute_fingerprint(provider, change_type, model, effective_at, source_url, title)
-```
-
-Fields are normalised (lowercased / stripped), joined with `|`, then hashed. The fingerprint is stored as a `UNIQUE` column — duplicate `INSERT` attempts raise `IntegrityError`, which `crud.create_update` catches and returns `None` for. This means calling `POST /api/collect` repeatedly is always safe.
+Composite indexes on `(provider, severity)` and `(created_at)`.
 
 ---
 
-## Configuration
+### `schemas.py`
+Pydantic v2 schemas and enums for validation, serialization, and fingerprinting.
 
-All settings are loaded once at import time by `config.py` into a module-level `settings` singleton. Values are read from environment variables or a `.env` file (via `pydantic-settings`). See the [root README](../README.md#configuration-reference) for the full list of configurable variables.
+**Enums:**
+- `Provider`: `google`, `openai`, `anthropic`, `azure`, `aws`
+- `ChangeType`: `NEW_MODEL`, `DEPRECATION_ANNOUNCED`, `RETIREMENT`, `SHUTDOWN_DATE_CHANGED`, `CAPABILITY_CHANGED`
+- `Severity`: `INFO`, `WARN`, `CRITICAL`
+
+**Key schemas:**
+- `ModelUpdateCreate` — inbound data; validates `source_url` (must be `http(s)://`); exposes `.fingerprint` property and `.raw_json()` serializer.
+- `ModelUpdateRead` — outbound ORM-mapped schema.
+- `FeedPage` — wraps `items`, `total`, `limit`, `next_cursor`.
+- `FeedQuery` — internal query spec with all filter fields plus `major_only`.
+- `CollectResult` — `{added, skipped, errors}` response for `POST /api/collect`.
+
+**`compute_fingerprint()`** hashes `(provider, change_type, model, effective_at, source_url, title)` via SHA-256 after normalizing case and whitespace.
 
 ---
 
-## Logging
+### `crud.py`
+Database access layer. All queries use SQLAlchemy 2.0 `select()` style.
 
-`main.py` configures `structlog` at startup with:
-- **ConsoleRenderer** with colors for local development
-- ISO 8601 timestamps
-- Log level, logger name, and exception info attached to every record
+| Function | Description |
+|----------|-------------|
+| `create_update(db, item)` | Insert a row; returns `None` on duplicate fingerprint (`IntegrityError`) |
+| `get_update(db, update_id)` | Fetch by UUID |
+| `list_updates(db, query)` | Filtered + paginated query; ordered by `announced_at DESC`, then `created_at DESC` |
+| `fingerprint_exists(db, fp)` | Lightweight existence check |
 
-Use Python's standard `logging.getLogger(__name__)` in any module — `structlog` intercepts and formats it automatically.
+Cursor decoding: `next_cursor` is an ISO timestamp compared against `created_at`.
 
 ---
 
-## Adding a new route
+### `db.py`
+SQLAlchemy engine, session factory, and shared `DeclarativeBase`.
 
-1. Add a handler function in `main.py`.
-2. Use `DBDep` (`Annotated[Session, Depends(get_db)]`) for database access.
-3. Add a corresponding schema in `schemas.py` if the request/response shape is new.
-4. Add CRUD helpers in `crud.py` if new queries are needed.
+- Creates the `data/` directory if absent (SQLite).
+- `engine` — `check_same_thread=False` for FastAPI compatibility.
+- `SessionLocal` — `autocommit=False, autoflush=False`.
+- `get_db()` — FastAPI dependency generator (yield + `finally: db.close()`).
+- `init_db()` — registers ORM classes and calls `Base.metadata.create_all()`.
+
+---
+
+## Sub-packages
+
+| Package | Description |
+|---------|-------------|
+| [`collectors/`](collectors/README.md) | Per-provider scrapers |
+| [`services/`](services/README.md) | Collector orchestration |
+| [`templates/`](templates/README.md) | Jinja2 web UI template |
+| [`static/`](static/README.md) | Frontend JS and CSS |

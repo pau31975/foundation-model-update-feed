@@ -102,7 +102,8 @@ class AnthropicCollector(BaseCollector):
             col_map = self._map_columns(
                 headers,
                 {
-                    "model": ["model name", "api model name", "api name", "model"],
+                    "model": ["model name", "model"],
+                    "api_model": ["api model name", "api name"],
                     "status": ["status", "availability", "support"],
                     "deprecation": ["deprecat", "end of support", "sunset", "retirement"],
                     "replacement": ["replacement", "successor", "use instead"],
@@ -114,7 +115,10 @@ class AnthropicCollector(BaseCollector):
                 if not cells or len(cells) < 2:
                     continue
 
-                model_name = self._get(cells, col_map.get("model"))
+                # Prefer the API model name (contains version) over the display name
+                api_model_name = self._get(cells, col_map.get("api_model"))
+                display_model_name = self._get(cells, col_map.get("model"))
+                model_name = api_model_name or display_model_name
                 if not model_name:
                     continue
 
@@ -223,15 +227,51 @@ class AnthropicCollector(BaseCollector):
             ):
                 continue
 
+            # Prefer a versioned API model ID (claude-xxx-YYYYMMDD) when present
             model_match = re.search(
-                r"(claude[-\s][\w\-\.]+(?:\d{8})?)",
-                body, re.IGNORECASE,
+                r"(claude[-\w.]*-\d{8})",
+                body,
             )
+            if not model_match:
+                # Match display names that contain a version number, which
+                # distinguishes real model names from product/service names:
+                #   "Claude 3.5 Sonnet"  →  <number> before family word
+                #   "Claude Sonnet 4"    →  <number> after family word
+                #   "Claude Opus 4.5"    →  <number> after family word
+                # Non-models like "Claude Console", "Claude Service", "Claude Docs"
+                # have no version number and are therefore NOT matched.
+                model_match = re.search(
+                    r"(Claude\s+\d[\d.]*\s+[A-Z][a-z]+|Claude\s+[A-Z][a-z]+\s+\d[\d.]*(?:\.\d+)?)",
+                    body,
+                )
             model_name = model_match.group(1).strip() if model_match else None
             if not model_name:
                 continue
 
-            if re.search(r"\b(deprecat|retire|end of support|sunset)\b", body, re.IGNORECASE):
+            # Scan a context window around the matched model name rather than
+            # the whole body.  This prevents a deprecation announcement for a
+            # *different* model later in the same changelog entry from poisoning
+            # the classification of the matched (often newly-launched) model.
+            ctx_start = max(0, model_match.start() - 160)
+            ctx_end = min(len(body), model_match.end() + 160)
+            context = body[ctx_start:ctx_end]
+
+            # Note: patterns are intentionally written without a trailing \b so
+            # that partial stems like "deprecat" match "deprecation"/"deprecated".
+            _retirement_re = re.compile(
+                r"retir(?:e[ds]?|ing|ement)|end of support|shut\s*down",
+                re.IGNORECASE,
+            )
+            _deprecation_re = re.compile(
+                r"deprecat(?:e[ds]?|ing|ion)",
+                re.IGNORECASE,
+            )
+
+            if _retirement_re.search(context):
+                change_type = ChangeType.RETIREMENT
+                severity = Severity.CRITICAL
+                title = f"Anthropic model '{model_name}' retired"
+            elif _deprecation_re.search(context):
                 change_type = ChangeType.DEPRECATION_ANNOUNCED
                 severity = Severity.WARN
                 title = f"Anthropic model '{model_name}' deprecation announced"

@@ -59,6 +59,10 @@ _RSS_RELEASE_RE = re.compile(
 def _parse_date(text: str) -> datetime | None:
     """Try common date formats and return UTC datetime or None."""
     text = re.sub(r"\s+", " ", text.strip())
+    # Strip trailing parenthetical region annotations, e.g. "(us-east-1 and us-west-2)"
+    text = re.sub(r"\s*\(.*?\).*$", "", text).strip()
+    # Remove ordinal suffixes: 1st, 2nd, 3rd, 4th, etc.
+    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text).strip()
     formats = [
         "%B %d, %Y",
         "%b %d, %Y",
@@ -82,6 +86,37 @@ def _parse_date(text: str) -> datetime | None:
     return None
 
 
+_DATE_ONLY_STRPTIME_FORMATS = (
+    "%B %d, %Y",
+    "%b %d, %Y",
+    "%B %Y",
+    "%b %Y",
+    "%Y-%m-%d",
+    "%d %B %Y",
+    "%d %b %Y",
+)
+
+
+def _is_date_string(text: str) -> bool:
+    """Return True if *text* is purely a date (possibly with a region annotation).
+
+    Uses strict strptime full-string matching only — no regex fallback — so that
+    model names containing an embedded date (e.g. ``gpt-4o-2024-05-13``) are NOT
+    falsely flagged.
+    """
+    # Strip region annotations like "(us-gov-east-1 and us-gov-west-1 Regions)"
+    stripped = re.sub(r"\s*\(.*", "", text).strip()
+    # Remove ordinal suffixes
+    stripped = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", stripped).strip()
+    for fmt in _DATE_ONLY_STRPTIME_FORMATS:
+        try:
+            datetime.strptime(stripped, fmt)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 class AWSCollector(BaseCollector):
     """Collects model lifecycle events from AWS Bedrock documentation."""
 
@@ -94,13 +129,6 @@ class AWSCollector(BaseCollector):
         items.extend(self._collect_lifecycle_page())
         items.extend(self._collect_doc_history())
 
-        if not items:
-            logger.info(
-                "[%s] Live parsing yielded no items – using seed data.",
-                self.provider_name,
-            )
-        # Always include seed entries; DB fingerprint deduplication handles duplicates.
-        items.extend(_SEED_ENTRIES)
         logger.info("[%s] collected %d item(s)", self.provider_name, len(items))
         return items
 
@@ -192,17 +220,30 @@ class AWSCollector(BaseCollector):
             col_map = self._map_columns(
                 headers,
                 {
-                    "model": ["model id", "model name", "model"],
+                    "model": ["model id", "model name", "model version", "model"],
                     "status": ["status", "state"],
-                    "deprecation": ["deprecation date", "deprecated", "deprecation"],
+                    "deprecation": [
+                        "legacy date",
+                        "legacy",
+                        "deprecation date",
+                        "deprecated",
+                        "deprecation",
+                    ],
                     "end_of_support": [
+                        "eol date",
+                        "eol",
                         "end-of-support",
                         "end of support",
                         "retirement date",
                         "discontinued",
                         "shutdown",
                     ],
-                    "replacement": ["replacement", "successor", "use instead"],
+                    "replacement": [
+                        "recommended model version replacement",
+                        "replacement",
+                        "successor",
+                        "use instead",
+                    ],
                 },
             )
 
@@ -216,6 +257,12 @@ class AWSCollector(BaseCollector):
 
                 model_name = self._get(cells, col_map.get("model"))
                 if not model_name:
+                    continue
+
+                # Skip continuation rows where the "model" cell is a
+                # region-specific date (e.g. "January 30, 2026 (us-gov-east-1
+                # Regions)") rather than an actual model identifier.
+                if _is_date_string(model_name):
                     continue
 
                 status_str = self._get(cells, col_map.get("status")) or ""
@@ -445,129 +492,3 @@ class AWSCollector(BaseCollector):
             return None
         val = cells[idx].strip()
         return val if val else None
-
-
-# ---------------------------------------------------------------------------
-# Seed / fallback data – comprehensive AWS Bedrock model lifecycle events
-# ---------------------------------------------------------------------------
-
-_SEED_ENTRIES: list[ModelUpdateCreate] = [
-    # ── New model releases ────────────────────────────────────────────────
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="amazon.nova-pro-v1:0",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="AWS Bedrock Amazon Nova Pro available",
-        summary=(
-            "amazon.nova-pro-v1:0 is available on AWS Bedrock. "
-            "Amazon Nova Pro is a highly capable multimodal model for complex enterprise "
-            "tasks with an optimal accuracy-to-speed tradeoff. Released December 3, 2024."
-        ),
-        source_url=_DOC_HISTORY_URL,
-        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="amazon.nova-lite-v1:0",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="AWS Bedrock Amazon Nova Lite available",
-        summary=(
-            "amazon.nova-lite-v1:0 is available on AWS Bedrock. "
-            "Nova Lite is a very low-cost multimodal model fast enough for real-time applications. "
-            "Released December 3, 2024."
-        ),
-        source_url=_DOC_HISTORY_URL,
-        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="amazon.nova-micro-v1:0",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="AWS Bedrock Amazon Nova Micro available",
-        summary=(
-            "amazon.nova-micro-v1:0 is available on AWS Bedrock. "
-            "Nova Micro is a text-only model delivering the lowest latency and cost in the Nova family. "
-            "Released December 3, 2024."
-        ),
-        source_url=_DOC_HISTORY_URL,
-        announced_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 12, 3, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="AWS Bedrock Claude 3.5 Sonnet v2 available",
-        summary=(
-            "anthropic.claude-3-5-sonnet-20241022-v2:0 is available on AWS Bedrock. "
-            "Upgraded Claude 3.5 Sonnet with improved coding, reasoning, and computer use "
-            "(beta). Released October 2024."
-        ),
-        source_url=_DOC_HISTORY_URL,
-        announced_at=datetime(2024, 10, 22, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 10, 22, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    # ── Retirements & deprecations ────────────────────────────────────────
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="anthropic.claude-v2:1",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="AWS Bedrock Claude 2.1 (anthropic.claude-v2:1) retired",
-        summary=(
-            "anthropic.claude-v2:1 on AWS Bedrock reached end of support on March 1, 2025. "
-            "Migrate to anthropic.claude-3-5-sonnet-20241022-v2:0 or amazon.nova-pro-v1:0."
-        ),
-        source_url=_LIFECYCLE_URL,
-        announced_at=datetime(2024, 11, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="anthropic.claude-instant-v1",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="AWS Bedrock Claude Instant v1 retired",
-        summary=(
-            "anthropic.claude-instant-v1 on AWS Bedrock reached end of support "
-            "on September 30, 2024. Migrate to anthropic.claude-3-haiku-20240307-v1:0."
-        ),
-        source_url=_LIFECYCLE_URL,
-        announced_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 9, 30, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "anthropic.claude-3-haiku-20240307-v1:0"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.aws,
-        product="aws_bedrock",
-        model="anthropic.claude-v2",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="AWS Bedrock Claude 2 (anthropic.claude-v2) retired",
-        summary=(
-            "anthropic.claude-v2 on AWS Bedrock reached end of support on August 1, 2024. "
-            "Migrate to anthropic.claude-3-haiku-20240307-v1:0 or later."
-        ),
-        source_url=_LIFECYCLE_URL,
-        announced_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 8, 1, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "anthropic.claude-3-haiku-20240307-v1:0"},
-    ),
-]

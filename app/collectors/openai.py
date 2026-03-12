@@ -30,7 +30,7 @@ _RSS_URL = settings.openai_rss_url
 
 # Matches specific OpenAI model identifiers within free text.
 _RSS_MODEL_RE = re.compile(
-    r"\b(gpt-5(?:\.\d+)?(?:-\w+)*|gpt-4(?:o)?(?:[\d.-]\w*)?|o[1-4](?:-\w+)?|"
+    r"\b(gpt-\d+(?:o)?(?:\.\d+)?(?:-\w+)*|o\d+(?:-\w+)?|"
     r"gpt-image-\d+(?:\.\d+)?(?:-\w+)*|dall-e-\d+|sora(?:-\d+(?:-\w+)?)?|"
     r"whisper-\d+(?:\.\d+)?|text-embedding[-\w]+|tts-\d+(?:-\w+)?)\b",
     re.IGNORECASE,
@@ -177,9 +177,9 @@ class OpenAICollector(BaseCollector):
                 continue
 
             model_match = re.search(
-                r"\b(gpt-5\.?\d*(?:-\w+)?|gpt-4\.\d+(?:-\w+)?|o\d+(?:-\w+)?|"
-                r"gpt-4o(?:-\w+)?|gpt-image-\d+(?:\.\d+)?(?:-\w+)?|"
-                r"sora-\d+(?:-\w+)?|gpt-realtime-\d+(?:\.\d+)?)",
+                r"\b(gpt-\d+(?:o)?(?:\.\d+)?(?:-\w+)*|o\d+(?:-\w+)?|"
+                r"gpt-image-\d+(?:\.\d+)?(?:-\w+)*|"
+                r"sora-\d+(?:-\w+)?|gpt-realtime-\d+(?:\.\d+)?(?:-\w+)?)",
                 body, re.IGNORECASE,
             )
             model_name: str | None = model_match.group(1).strip() if model_match else None

@@ -1,359 +1,203 @@
-# llm-provider-update-feed
+# Foundation Model Update Feed
 
-A self-hosted feed service that tracks **model lifecycle events** (new models,
-deprecations, retirements, capability changes) across major LLM providers:
-**Google Gemini**, **OpenAI**, **Anthropic**, **Azure OpenAI**, and **AWS Bedrock**.
+A FastAPI service that scrapes and aggregates **model lifecycle events** — new models, deprecations, retirements, and capability changes — from five major AI providers. Events are stored in SQLite with SHA-256 deduplication and exposed via a REST API and a server-rendered web UI.
 
-Built with FastAPI + SQLite. Runs on `localhost` with one command.
+**Providers covered:** Google Gemini · OpenAI · Anthropic · Azure OpenAI · AWS Bedrock
 
 ---
 
 ## Features
 
-- **REST API** — list, create, and collect feed items
-- **Web UI** — server-rendered timeline with severity badges and filters
-- **Collector framework** — pluggable per-provider scrapers with deduplication
-- **OpenAPI docs** — auto-generated at `/docs` and `/redoc`
-- **Structured logging** — via `structlog`
-- **Docker support** — `Dockerfile` + `docker-compose.yml` included
+- Collects events from provider documentation pages and RSS feeds
+- Deduplicates via SHA-256 fingerprint (provider + change type + model + date + URL + title)
+- Cursor-based paginated JSON API with provider/severity/change-type filters
+- Server-rendered feed UI with filter dropdowns and one-click collector trigger
+- Docker-ready with a non-root multi-stage image and persistent SQLite volume
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
-llm-provider-update-feed/
-├── app/                       # Main application package  ← app/README.md
-│   ├── main.py                # FastAPI app + all routes
-│   ├── config.py              # Pydantic-settings (env / .env)
-│   ├── db.py                  # SQLAlchemy engine & session
-│   ├── models.py              # ORM model: model_updates table
-│   ├── schemas.py             # Pydantic schemas + fingerprint logic
-│   ├── crud.py                # DB read/write operations
-│   ├── services/              # Orchestration layer  ← app/services/README.md
-│   │   └── collector_service.py   # Runs all collectors, persists results
-│   ├── collectors/            # Per-provider scrapers  ← app/collectors/README.md
-│   │   ├── base.py            # Abstract BaseCollector + shared RSS helper
-│   │   ├── gemini.py          # Google Gemini (RSS + HTML scraping)
-│   │   ├── openai.py          # OpenAI (RSS + HTML scraping)
-│   │   ├── anthropic.py       # Anthropic Claude (HTML scraping)
-│   │   ├── azure.py           # Azure OpenAI (HTML scraping + seed fallback)
-│   │   └── aws.py             # AWS Bedrock (RSS + HTML scraping + seed fallback)
-│   ├── templates/             # Jinja2 templates  ← app/templates/README.md
-│   │   └── index.html         # Server-rendered feed page
-│   └── static/                # CSS + JS assets  ← app/static/README.md
-│       ├── styles.css
-│       └── app.js
-├── tests/                     # pytest suite  ← tests/README.md
-│   └── test_dedupe.py         # Dedupe + collector parsing tests
-├── data/                      # SQLite DB written here at runtime
-├── .env.example
-├── Dockerfile
-├── docker-compose.yml
-├── Makefile
-├── requirements.txt
-└── README.md
+.
+├── app/
+│   ├── main.py                 # FastAPI app, routes, lifespan
+│   ├── config.py               # Settings via pydantic-settings
+│   ├── models.py               # SQLAlchemy ORM (model_updates table)
+│   ├── schemas.py              # Pydantic schemas, enums, fingerprint logic
+│   ├── crud.py                 # DB access layer
+│   ├── db.py                   # Engine, session factory, init_db
+│   ├── collectors/             # Per-provider scrapers
+│   │   ├── base.py             # BaseCollector (HTTP fetch, RSS parser)
+│   │   ├── anthropic.py        # Anthropic Claude docs
+│   │   ├── aws.py              # AWS Bedrock docs + What's New RSS
+│   │   ├── azure.py            # Azure OpenAI docs
+│   │   ├── gemini.py           # Google Gemini + Vertex AI docs + RSS
+│   │   └── openai.py           # OpenAI docs + blog RSS
+│   ├── services/
+│   │   └── collector_service.py  # Orchestrates all collectors
+│   ├── templates/
+│   │   └── index.html          # Jinja2 web UI
+│   └── static/
+│       ├── app.js              # Collector trigger button logic
+│       └── styles.css          # Component styles (CSS variables)
+├── tests/
+│   └── test_dedupe.py          # Deduplication unit tests
+├── data/                       # SQLite DB (gitignored, persisted in Docker)
+├── Dockerfile                  # Multi-stage build, non-root user
+├── docker-compose.yml          # Single-service compose with volume + healthcheck
+├── Makefile                    # Dev, test, lint, Docker convenience targets
+├── pyproject.toml              # Project metadata and tool config
+└── requirements.txt            # Pinned runtime dependencies
 ```
-
-Each subdirectory has its own `README.md` with a detailed file map, component descriptions, data-flow diagrams, and extension guides.
 
 ---
 
-## Quick start (local)
+## API
 
-### 1. Clone & install
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Web feed UI with filters |
+| `GET` | `/health` | Health check — `{"status": "ok"}` |
+| `GET` | `/api/updates` | Paginated JSON feed |
+| `POST` | `/api/updates` | Manually create a feed item (409 on duplicate) |
+| `POST` | `/api/collect` | Trigger all collectors; returns `{added, skipped, errors}` |
+| `GET` | `/docs` | Swagger UI |
+| `GET` | `/redoc` | ReDoc UI |
 
-```bash
-git clone https://github.com/your-org/llm-provider-update-feed
-cd llm-provider-update-feed
+### `GET /api/updates` query parameters
 
-uv sync          # creates .venv and installs all deps from uv.lock
-```
-
-> **No uv?** Install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`
-> or fall back to the classic approach: `python -m venv .venv && pip install -r requirements.txt`
-
-### 2. Configure (optional)
-
-```bash
-cp .env.example .env
-# Works out of the box – SQLite, no API keys required.
-```
-
-### 3. Run
-
-```bash
-uv run uvicorn app.main:app --reload
-# or: make dev
-```
-
-The server starts at **http://127.0.0.1:8000**.
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | string | Filter by provider (`google`, `openai`, `anthropic`, `azure`, `aws`) |
+| `severity` | string | `INFO`, `WARN`, or `CRITICAL` |
+| `change_type` | string | `NEW_MODEL`, `DEPRECATION_ANNOUNCED`, `RETIREMENT`, `SHUTDOWN_DATE_CHANGED`, `CAPABILITY_CHANGED` |
+| `since` | ISO datetime | Only items announced after this time |
+| `cursor` | ISO datetime | Pagination cursor (`next_cursor` from previous response) |
+| `limit` | int | Page size (default: 50, max: 200) |
 
 ---
 
-## Usage
+## Data Model
 
-### Web UI
+All events are stored in the `model_updates` table.
 
-Open **http://127.0.0.1:8000** in your browser.
-
-- Use the dropdowns to filter by provider, severity, or change type.
-- Click **⚡ Major only** to show only new-model releases, retirements, and deprecation announcements (hides general capability updates).
-- Click **Run collectors now** to fetch live data from provider docs.
-- Items are colour-coded: red = CRITICAL, amber = WARN, blue = INFO.
-
-### OpenAPI docs
-
-- Swagger UI: http://127.0.0.1:8000/docs
-- ReDoc: http://127.0.0.1:8000/redoc
-
----
-
-## API reference
-
-### `GET /health`
-```bash
-curl http://localhost:8000/health
-# {"status":"ok"}
-```
-
-### `GET /api/updates` — list feed items
-
-```bash
-# All items (most recent first)
-curl http://localhost:8000/api/updates | python -m json.tool
-
-# Filter by provider + severity
-curl "http://localhost:8000/api/updates?provider=openai&severity=CRITICAL"
-
-# Filter by change type and date
-curl "http://localhost:8000/api/updates?change_type=RETIREMENT&since=2024-01-01T00:00:00Z"
-
-# Paginate
-curl "http://localhost:8000/api/updates?limit=10"
-# Use next_cursor from response for next page:
-curl "http://localhost:8000/api/updates?limit=10&cursor=2024-06-01T12:00:00Z"
-```
-
-**Query parameters**
-
-| Parameter     | Type     | Description                                       |
-|---------------|----------|---------------------------------------------------|
-| `provider`    | string   | `google` \| `openai` \| `anthropic` \| `azure` \| `aws` |
-| `severity`    | string   | `INFO` \| `WARN` \| `CRITICAL`                   |
-| `change_type` | string   | `NEW_MODEL` \| `DEPRECATION_ANNOUNCED` \| `RETIREMENT` \| `SHUTDOWN_DATE_CHANGED` \| `CAPABILITY_CHANGED` |
-| `since`       | datetime | ISO 8601 – only return items after this timestamp |
-| `limit`       | int      | 1–200, default 50                                 |
-| `cursor`      | string   | Opaque pagination cursor from previous response   |
-
-> **Note:** The `major_only` filter (show only NEW_MODEL / RETIREMENT / DEPRECATION_ANNOUNCED) is available exclusively through the **web UI** (`GET /`). The JSON API always returns items of all change types unless you filter with `change_type`.
-
-### `POST /api/updates` — create an item manually
-
-```bash
-curl -X POST http://localhost:8000/api/updates \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "anthropic",
-    "product": "anthropic_api",
-    "model": "claude-2",
-    "change_type": "DEPRECATION_ANNOUNCED",
-    "severity": "WARN",
-    "title": "Claude 2 deprecated",
-    "summary": "Claude 2 is deprecated in favour of Claude 3 Haiku.",
-    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models",
-    "effective_at": "2025-06-01T00:00:00Z"
-  }'
-```
-
-Returns **201 Created** with the stored item, or **409 Conflict** if a
-duplicate fingerprint is detected.
-
-### `POST /api/collect` — run all collectors
-
-```bash
-curl -X POST http://localhost:8000/api/collect | python -m json.tool
-# {"added": 7, "skipped": 0, "errors": []}
-```
-
-This is safe to call repeatedly – duplicates are silently skipped.
+| Column | Description |
+|--------|-------------|
+| `id` | UUID primary key |
+| `provider` | Provider name |
+| `product` | Product line (e.g. `gemini_api`, `aws_bedrock`) |
+| `model` | Model identifier (nullable) |
+| `change_type` | Event category |
+| `severity` | `INFO` / `WARN` / `CRITICAL` |
+| `title` | Event headline |
+| `summary` | Short description |
+| `source_url` | Canonical source link |
+| `announced_at` / `effective_at` | Event timestamps (nullable) |
+| `fingerprint` | SHA-256 dedup key (unique) |
+| `raw` | JSON-serialized raw collector output |
 
 ---
 
-## Running tests
+## Configuration
+
+Settings are loaded from environment variables or a `.env` file.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `sqlite:///./data/updates.db` | SQLite path |
+| `HOST` | `127.0.0.1` | Bind host |
+| `PORT` | `8000` | Bind port |
+| `RELOAD` | `true` | Uvicorn auto-reload |
+| `LOG_LEVEL` | `info` | Log verbosity |
+| `COLLECTOR_TIMEOUT_SECONDS` | `30` | Per-request HTTP timeout |
+| `COLLECTOR_MAX_RETRIES` | `2` | Retry attempts on failure |
+| `DEFAULT_PAGE_LIMIT` | `50` | Default page size |
+| `MAX_PAGE_LIMIT` | `200` | Max page size |
+| `*_SOURCE_URLS` | Per-provider defaults | Override as a JSON array |
+
+---
+
+## app/collectors/
+
+Each collector subclasses `BaseCollector`, which provides:
+- `_fetch(url)` — HTTP GET with retry and structured logging
+- `_fetch_rss(url)` — RSS XML fetch and parse
+
+Collectors implement `collect() -> list[ModelUpdateCreate]` and never raise — all errors are caught and logged internally.
+
+| Collector | Sources |
+|-----------|---------|
+| `GeminiCollector` | Deprecation table, changelog, Vertex AI model versions & release notes, Google blog RSS |
+| `OpenAICollector` | Deprecations page, changelog, blog RSS |
+| `AnthropicCollector` | All-models table, API release notes |
+| `AzureCollector` | Retirement/deprecation tables, What's New pages |
+| `AWSCollector` | Model lifecycle table, doc history changelog, What's New RSS |
+
+All collectors ship with seed fallback entries. The DB unique constraint on `fingerprint` prevents double-inserts.
+
+### Adding a new provider
+
+1. Create `app/collectors/<provider>.py` subclassing `BaseCollector`.
+2. Implement `collect()` returning `list[ModelUpdateCreate]`.
+3. Append the class to `_ALL_COLLECTORS` in `app/services/collector_service.py`.
+
+---
+
+## app/services/
+
+`collector_service.py` contains `run_all_collectors(db)`, which:
+1. Instantiates all registered collectors
+2. Calls `.collect()` on each
+3. Persists results via `crud.create_update()`; duplicates (fingerprint collision) increment `skipped`
+4. Returns `CollectResult(added, skipped, errors)`
+
+---
+
+## app/templates/ & app/static/
+
+The web UI served at `GET /` renders a server-side Jinja2 template.
+
+- **Filter bar** — provider, severity, change type, and limit dropdowns; auto-submits on change
+- **Collector trigger** — "Run collectors now" button calls `POST /api/collect` via `fetch()` and shows added/skipped counts inline
+- **Feed cards** — each card shows provider/severity/type badges, model tag, dates, title (linked to source), and summary
+- **Styles** — CSS custom properties for severity (`CRITICAL` = red, `WARN` = amber, `INFO` = blue) and per-provider accent colors
+
+---
+
+## Development
+
+**Prerequisites:** Python 3.11+, [`uv`](https://github.com/astral-sh/uv)
 
 ```bash
-uv run pytest tests/ -v
-# or: make test
+make install        # install dependencies
+make dev            # start dev server with auto-reload at http://127.0.0.1:8000
+make test           # run pytest
+make lint           # ruff check
+make collect        # trigger collectors via curl
 ```
 
 ---
 
 ## Docker
 
-### Build & run with Docker Compose
+```bash
+make docker-build   # build image
+make docker-up      # start container (detached)
+make docker-logs    # tail logs
+make docker-down    # stop and remove container
+```
+
+The compose file binds `./data` to `/app/data` to persist the SQLite database across restarts. The healthcheck polls `GET /health` every 30 seconds.
+
+---
+
+## Tests
+
+`tests/test_dedupe.py` covers the fingerprint deduplication logic — verifying that identical events produce the same fingerprint and that differing fields produce distinct fingerprints.
 
 ```bash
-docker compose up --build
+make test
+# or
+uv run pytest tests/ -v
 ```
-
-The service will be available at **http://localhost:8000**.
-
-SQLite data persists in `./data/` on your host.
-
----
-
-## Makefile targets
-
-| Target | Description |
-|---|---|
-| `make sync` / `make install` | Install all dependencies via `uv sync` |
-| `make dev` | Run the development server with auto-reload on `127.0.0.1:8000` |
-| `make run` | Run the production-like server (no reload) |
-| `make test` | Run all tests with `pytest -v` |
-| `make lint` | Run `ruff` linter over `app/` and `tests/` |
-| `make collect` | `curl -X POST http://localhost:8000/api/collect` (server must be running) |
-| `make docker-build` | Build the Docker image |
-| `make docker-up` | Start service detached via Docker Compose |
-| `make docker-down` | Stop and remove containers |
-| `make docker-logs` | Follow container logs |
-| `make clean` | Remove `__pycache__`, `.pyc`, `.pytest_cache`, `htmlcov`, `.coverage` |
-| `make help` | Print all targets with descriptions |
-
----
-
-## Configuration reference
-
-All settings live in `app/config.py` as a `pydantic-settings` `BaseSettings` class. Override any value with an environment variable of the same name (case-insensitive) or in a `.env` file.
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `sqlite:///./data/updates.db` | SQLAlchemy database URL |
-| `HOST` | `127.0.0.1` | Uvicorn bind address |
-| `PORT` | `8000` | Uvicorn port |
-| `RELOAD` | `True` | Enable auto-reload (dev only) |
-| `LOG_LEVEL` | `info` | Python logging level |
-| `COLLECTOR_TIMEOUT_SECONDS` | `30` | HTTP request timeout for collectors |
-| `COLLECTOR_MAX_RETRIES` | `2` | Extra retry attempts (total = max_retries + 2) |
-| `DEFAULT_PAGE_LIMIT` | `50` | Default items per page |
-| `MAX_PAGE_LIMIT` | `200` | Maximum allowed limit |
-| `GEMINI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog, vertex-model-versions, vertex-release-notes]` URLs for Gemini and Vertex AI |
-| `OPENAI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog]` URLs for OpenAI |
-| `ANTHROPIC_SOURCE_URLS` | JSON array | `[models, release-notes/api (unused), model-deprecations (unused)]` |
-| `AZURE_SOURCE_URLS` | JSON array | `[whats-new (foundry-classic), models, whats-new-legacy (unused)]` |
-| `AWS_SOURCE_URLS` | JSON array | `[model-lifecycle, doc-history, release-notes (unused)]` |
-| `OPENAI_RSS_URL` | `https://openai.com/blog/rss.xml` | OpenAI blog RSS feed |
-| `GOOGLE_RSS_URL` | `https://blog.google/products/gemini/rss/` | Google Gemini blog RSS feed |
-| `AWS_RSS_URL` | `https://aws.amazon.com/about-aws/whats-new/recent/feed/` | AWS What's New RSS feed |
-
-```bash
-# Trigger collection inside the running container
-curl -X POST http://localhost:8000/api/collect
-
-# Stop
-docker compose down
-```
-
-### Individual Docker commands
-
-```bash
-docker build -t llm-update-feed .
-docker run -p 8000:8000 -v "$(pwd)/data:/app/data" llm-update-feed
-```
-
----
-
-## Collector framework
-
-Each collector lives in `app/collectors/` and extends `BaseCollector`:
-
-```python
-class MyProviderCollector(BaseCollector):
-    provider_name = "myprovider"
-
-    def collect(self) -> list[ModelUpdateCreate]:
-        html = self._fetch("https://provider.com/docs/changelog")
-        # parse and return list[ModelUpdateCreate]
-        ...
-```
-
-Register the new collector in `app/services/collector_service.py`:
-
-```python
-_ALL_COLLECTORS: list[type[BaseCollector]] = [
-    GeminiCollector,
-    OpenAICollector,
-    MyProviderCollector,   # add here
-    ...
-]
-```
-
-**Deduplication** is automatic: a SHA-256 fingerprint is computed from
-`provider + change_type + model + effective_at + source_url + title`.
-Duplicate inserts are silently ignored at the DB level (UNIQUE constraint).
-
-### Collector status
-
-| Provider  | Status      | Source                                                |
-|-----------|-------------|-------------------------------------------------------|
-| Google    | ✅ Live + seed | `ai.google.dev/gemini-api/docs/deprecations`, `cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions`, `cloud.google.com/vertex-ai/generative-ai/docs/release-notes` |
-| OpenAI    | ✅ Live + seed | `platform.openai.com/docs/deprecations`             |
-| Anthropic | 🚧 Stub (TODO) | `docs.anthropic.com/en/docs/about-claude/models`   |
-| Azure     | 🚧 Stub (TODO) | `learn.microsoft.com/azure/ai-services/openai/…`   |
-| AWS       | 🚧 Stub (TODO) | `docs.aws.amazon.com/bedrock/latest/userguide/…`   |
-
-> **Note:** The Gemini and OpenAI pages are partially JS-rendered.
-> If live parsing yields no results, the collector automatically falls back to
-> a curated set of known seed entries so the feed always has representative data.
-
----
-
-## Configuration reference
-
-All settings can be overridden via environment variables or `.env`:
-
-| Variable                   | Default                       | Description                  |
-|----------------------------|-------------------------------|------------------------------|
-| `DATABASE_URL`             | `sqlite:///./data/updates.db` | SQLAlchemy database URL      |
-| `HOST`                     | `127.0.0.1`                   | Bind host                    |
-| `PORT`                     | `8000`                        | Bind port                    |
-| `RELOAD`                   | `true`                        | Uvicorn auto-reload          |
-| `LOG_LEVEL`                | `info`                        | Logging level                |
-| `COLLECTOR_TIMEOUT_SECONDS`| `30`                          | HTTP timeout per collector   |
-| `COLLECTOR_MAX_RETRIES`    | `2`                           | Retry attempts per URL       |
-| `DEFAULT_PAGE_LIMIT`       | `50`                          | Default items per page       |
-| `MAX_PAGE_LIMIT`           | `200`                         | Maximum items per page       |
-
----
-
-## Make targets
-
-```
-make sync          Install / update deps (uv sync)
-make dev           Run dev server (auto-reload)
-make run           Run production-like server
-make test          Run test suite
-make collect       Trigger collector via curl
-make lint          Run ruff linter
-make docker-build  Build Docker image
-make docker-up     Start via Docker Compose
-make docker-down   Stop containers
-make clean         Remove __pycache__ etc.
-```
-
----
-
-## Further reading
-
-Each directory contains a `README.md` with deeper documentation:
-
-| Path | Contents |
-|---|---|
-| [`app/README.md`](app/README.md) | Full module map, request lifecycle diagrams, data model, module dependency graph |
-| [`app/collectors/README.md`](app/collectors/README.md) | Collector framework, parsing strategies, how to implement a new provider |
-| [`app/services/README.md`](app/services/README.md) | Orchestration service, error isolation, how to add new services |
-| [`app/static/README.md`](app/static/README.md) | CSS design tokens, component class reference, JS button handler |
-| [`app/templates/README.md`](app/templates/README.md) | Jinja2 template structure, context variables, filter behaviour |
-| [`tests/README.md`](tests/README.md) | Test architecture, fixture/mock strategy, coverage gaps |
-
-### Check :)

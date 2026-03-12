@@ -93,8 +93,12 @@ def list_updates(db: Session, query: FeedQuery) -> tuple[list[ModelUpdate], int]
 
     total: int = db.execute(count_stmt).scalar_one()
 
+    # Use the later of announced_at / effective_at so that items from the
+    # deprecations table (announced_at=None but a concrete effective_at) still
+    # surface in a sensible position.
+    sort_date = func.coalesce(ModelUpdate.announced_at, ModelUpdate.effective_at)
     stmt = base_stmt.order_by(
-        ModelUpdate.announced_at.desc().nulls_last(),
+        sort_date.desc().nulls_last(),
         ModelUpdate.created_at.desc(),
     ).limit(query.limit)
     rows = list(db.execute(stmt).scalars().all())

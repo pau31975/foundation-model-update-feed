@@ -260,7 +260,13 @@ class GeminiCollector(BaseCollector):
     # ------------------------------------------------------------------
 
     def _collect_changelog(self) -> list[ModelUpdateCreate]:
-        """Best-effort parse of Gemini changelog for NEW_MODEL entries."""
+        """Best-effort parse of Gemini changelog for model lifecycle events.
+
+        Each dated heading (h2 MMMM D, YYYY) is followed by a <ul> of bullet
+        points.  Each bullet is processed individually so that deprecation /
+        retirement announcements and new-model launches are all captured with
+        the correct date and change-type.
+        """
         html = self._fetch(_CHANGELOG_URL)
         if not html:
             return []
@@ -268,49 +274,125 @@ class GeminiCollector(BaseCollector):
         soup = BeautifulSoup(html, "html.parser")
         items: list[ModelUpdateCreate] = []
 
-        # Look for heading + paragraph patterns typical in changelog pages
         headings = soup.find_all(re.compile(r"^h[23]$"))
         for heading in headings:
             heading_text = heading.get_text(strip=True)
             date = _parse_date(heading_text)
 
-            # Walk sibling paragraphs / list items under this heading
             sibling = heading.next_sibling
-            while sibling and isinstance(sibling, Tag) and sibling.name not in ("h2", "h3", "h4"):
-                sibling_text = sibling.get_text(separator=" ", strip=True)
-                # Look for entries mentioning "new model" or specific model names
-                if re.search(r"\b(gemini[-\s]\w+|model|launch|available|release)\b",
-                             sibling_text, re.IGNORECASE):
-                    # Try to extract model name
-                    model_match = re.search(
-                        r"(gemini[-\s\d\.]+(?:pro|flash|ultra|nano)?(?:[-\s]\d+\.\d+|\w+)?)",
-                        sibling_text, re.IGNORECASE
+            while sibling:
+                # Skip whitespace NavigableString nodes between tags.
+                if not isinstance(sibling, Tag):
+                    sibling = sibling.next_sibling
+                    continue
+                if sibling.name in ("h2", "h3", "h4"):
+                    break
+                # Expand <ul>/<ol> into individual <li> items for per-entry handling;
+                # other block elements (p, div, …) are treated as a single entry.
+                candidates: list[Tag] = (
+                    sibling.find_all("li", recursive=False)
+                    if sibling.name in ("ul", "ol")
+                    else [sibling]
+                )
+                for candidate in candidates:
+                    self._process_changelog_entry(
+                        candidate, date, heading_text, items
                     )
-                    model_name = model_match.group(1) if model_match else None
-
-                    if model_name and len(sibling_text) > 20:
-                        try:
-                            items.append(
-                                ModelUpdateCreate(
-                                    provider=Provider.google,
-                                    product="gemini_api",
-                                    model=model_name.strip(),
-                                    change_type=ChangeType.NEW_MODEL,
-                                    severity=Severity.INFO,
-                                    title=f"New Gemini model: {model_name.strip()}",
-                                    summary=sibling_text[:512],
-                                    source_url=_CHANGELOG_URL,
-                                    announced_at=date,
-                                    effective_at=date,
-                                    raw={"heading": heading_text, "snippet": sibling_text[:256]},
-                                )
-                            )
-                        except Exception as exc:
-                            logger.debug("[%s] Skipping changelog item: %s", self.provider_name, exc)
-
-                sibling = sibling.next_sibling if sibling else None
+                sibling = sibling.next_sibling
 
         return items
+
+    def _process_changelog_entry(
+        self,
+        tag: Tag,
+        date: "datetime | None",
+        heading_text: str,
+        items: list[ModelUpdateCreate],
+    ) -> None:
+        """Classify and append a single changelog bullet/block."""
+        text = tag.get_text(separator=" ", strip=True)
+        if not text or len(text) < 20:
+            return
+
+        is_retirement = bool(re.search(
+            r"\b(shut.?down|retire|end.of.?life)\b", text, re.IGNORECASE
+        ))
+        is_deprecation = bool(re.search(
+            r"\b(deprecat)\b", text, re.IGNORECASE
+        ))
+        is_release = bool(
+            _RSS_RELEASE_RE.search(text)
+            or re.search(r"\b(launch\w*|released?)\b", text, re.IGNORECASE)
+        )
+
+        if not (is_retirement or is_deprecation or is_release):
+            return
+        if not re.search(r"\b(gemini|model|api)\b", text, re.IGNORECASE):
+            return
+
+        # Prefer <code> element contents as the most accurate model identifier.
+        code_values = [c.get_text(strip=True) for c in tag.find_all("code")]
+        model_name: str | None = next(
+            (c for c in code_values if re.match(r"gemini[-\s]", c, re.IGNORECASE)),
+            None,
+        )
+        if model_name is None:
+            m = re.search(
+                r"(gemini[-\s\d.]+(?:pro|flash|ultra|nano|exp|embed)?"
+                r"(?:[-\s](?:preview|latest|[\d.]+\w*))?)",
+                text, re.IGNORECASE,
+            )
+            model_name = m.group(1).strip() if m else None
+
+        if is_retirement:
+            change_type = ChangeType.RETIREMENT
+            severity = Severity.CRITICAL
+            title = (
+                f"Gemini model '{model_name}' shut down"
+                if model_name
+                else f"Gemini retirement: {text[:80]}"
+            )
+        elif is_deprecation:
+            change_type = ChangeType.DEPRECATION_ANNOUNCED
+            severity = Severity.WARN
+            title = (
+                f"Gemini model '{model_name}' deprecation announced"
+                if model_name
+                else f"Gemini deprecation: {text[:80]}"
+            )
+        else:
+            change_type = ChangeType.NEW_MODEL
+            severity = Severity.INFO
+            title = (
+                f"New Gemini model: {model_name}"
+                if model_name
+                else f"Gemini: {text[:80]}"
+            )
+
+        try:
+            items.append(
+                ModelUpdateCreate(
+                    provider=Provider.google,
+                    product="gemini_api",
+                    model=model_name,
+                    change_type=change_type,
+                    severity=severity,
+                    title=title[:256],
+                    summary=text[:512],
+                    source_url=_CHANGELOG_URL,
+                    announced_at=date,
+                    effective_at=(
+                        date
+                        if change_type in (ChangeType.NEW_MODEL, ChangeType.RETIREMENT)
+                        else None
+                    ),
+                    raw={"heading": heading_text, "snippet": text[:256]},
+                )
+            )
+        except Exception as exc:
+            logger.debug(
+                "[%s] Skipping changelog entry: %s", self.provider_name, exc
+            )
 
     # ------------------------------------------------------------------
     # Vertex AI — model versions / lifecycle

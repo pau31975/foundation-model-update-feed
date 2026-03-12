@@ -35,6 +35,10 @@ _WHATS_NEW_LEGACY_URL = settings.azure_source_urls[2]
 def _parse_date(text: str) -> datetime | None:
     """Try common date formats and return UTC datetime or None."""
     text = re.sub(r"\s+", " ", text.strip())
+    # Strip trailing parenthetical annotations, e.g. "(us-east-1 and us-west-2)"
+    text = re.sub(r"\s*\(.*?\).*$", "", text).strip()
+    # Remove ordinal suffixes: 1st, 2nd, 3rd, 4th, etc.
+    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text).strip()
     formats = [
         "%B %d, %Y",
         "%b %d, %Y",
@@ -69,13 +73,6 @@ class AzureCollector(BaseCollector):
         items.extend(self._collect_models_page())
         items.extend(self._collect_whats_new())
 
-        if not items:
-            logger.info(
-                "[%s] Live parsing yielded no items – using seed data.",
-                self.provider_name,
-            )
-        # Always include seed entries; DB fingerprint deduplication handles duplicates.
-        items.extend(_SEED_ENTRIES)
         logger.info("[%s] collected %d item(s)", self.provider_name, len(items))
         return items
 
@@ -96,7 +93,7 @@ class AzureCollector(BaseCollector):
         # then collect tables immediately following them.
         for heading in soup.find_all(re.compile(r"^h[2345]$")):
             heading_text = heading.get_text(strip=True).lower()
-            if not re.search(r"\b(retir|deprecat|legacy|end.of.?life|sunset)\b", heading_text):
+            if not re.search(r"\b(retir|deprecat|legacy|end.of.?life|sunset)", heading_text):
                 continue
             sibling = heading.next_sibling
             while sibling:
@@ -117,7 +114,7 @@ class AzureCollector(BaseCollector):
                         td.get_text(strip=True).lower()
                         for td in rows[0].find_all(["th", "td"])
                     ]
-            if re.search(r"\b(retir|deprecat|end of life|sunset)\b", " ".join(headers)):
+            if re.search(r"\b(retir|deprecat|end of life|sunset)", " ".join(headers)):
                 items.extend(self._parse_retirement_table(table))
 
         return items
@@ -141,7 +138,8 @@ class AzureCollector(BaseCollector):
             headers,
             {
                 "model": ["model name", "model version", "model"],
-                "retirement": ["retirement", "retire", "end of", "sunset", "deprecat"],
+                "retirement": ["retirement date", "retirement", "retire", "end of", "sunset"],
+                "deprecation": ["deprecation", "deprecat"],
                 "replacement": ["replacement", "successor", "migrate", "upgrade to"],
             },
         )
@@ -159,12 +157,15 @@ class AzureCollector(BaseCollector):
                 continue
 
             retirement_str = self._get(cells, col_map.get("retirement"))
+            deprecation_str = self._get(cells, col_map.get("deprecation"))
             replacement = self._get(cells, col_map.get("replacement"))
             retirement_date = _parse_date(retirement_str) if retirement_str else None
+            deprecation_date = _parse_date(deprecation_str) if deprecation_str else None
 
             row_text = " ".join(cells).lower()
             if not (
                 retirement_date
+                or deprecation_date
                 or re.search(r"\b(retir|deprecat|end of|sunset)\b", row_text)
             ):
                 continue
@@ -172,6 +173,7 @@ class AzureCollector(BaseCollector):
             if retirement_date:
                 change_type = ChangeType.RETIREMENT
                 severity = Severity.CRITICAL
+                effective = retirement_date
                 title = f"Azure OpenAI model '{model_name}' retiring"
                 summary = (
                     f"'{model_name}' is scheduled for retirement"
@@ -179,9 +181,21 @@ class AzureCollector(BaseCollector):
                     + (f". Replacement: {replacement}" if replacement else "")
                     + "."
                 )
+            elif deprecation_date:
+                change_type = ChangeType.DEPRECATION_ANNOUNCED
+                severity = Severity.WARN
+                effective = deprecation_date
+                title = f"Azure OpenAI model '{model_name}' deprecated"
+                summary = (
+                    f"'{model_name}' has been deprecated"
+                    + (f" as of {deprecation_str}" if deprecation_str else "")
+                    + (f". Replacement: {replacement}" if replacement else "")
+                    + "."
+                )
             else:
                 change_type = ChangeType.DEPRECATION_ANNOUNCED
                 severity = Severity.WARN
+                effective = None
                 title = f"Azure OpenAI model '{model_name}' deprecated"
                 summary = (
                     f"'{model_name}' has been deprecated"
@@ -201,10 +215,11 @@ class AzureCollector(BaseCollector):
                         summary=summary,
                         source_url=_MODELS_URL,
                         announced_at=None,
-                        effective_at=retirement_date,
+                        effective_at=effective,
                         raw={
                             "model": model_name,
                             "retirement_date": retirement_str,
+                            "deprecation_date": deprecation_str,
                             "replacement": replacement,
                         },
                     )
@@ -326,159 +341,3 @@ class AzureCollector(BaseCollector):
             return None
         val = cells[idx].strip()
         return val if val else None
-
-
-# ---------------------------------------------------------------------------
-# Seed / fallback data – comprehensive Azure OpenAI model lifecycle events
-# ---------------------------------------------------------------------------
-
-_SEED_ENTRIES: list[ModelUpdateCreate] = [
-    # ── New model releases ────────────────────────────────────────────────
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-realtime-1.5",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI gpt-realtime-1.5 and gpt-audio-1.5 released",
-        summary=(
-            "gpt-realtime-1.5 and gpt-audio-1.5 are now available on Azure OpenAI. "
-            "Support real-time voice conversations and audio generation capabilities. "
-            "Released February 2026."
-        ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-5",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI GPT-5 family available",
-        summary=(
-            "gpt-5, gpt-5-mini, and gpt-5-nano are now available on Azure OpenAI. "
-            "Released August 2025. gpt-5 and gpt-5-mini support 1M token context windows."
-        ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2025, 8, 7, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 8, 7, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-5-codex",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI GPT-5 Codex available",
-        summary=(
-            "gpt-5-codex available on Azure OpenAI from September 2025. "
-            "Optimized for code generation and software engineering tasks."
-        ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2025, 9, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 9, 1, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-4.1",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI GPT-4.1 available (1M context)",
-        summary=(
-            "gpt-4.1 released on Azure OpenAI April 2025. "
-            "Features a 1M token context window, improved instruction following, and coding. "
-            "Also available: gpt-4.1-mini and gpt-4.1-nano."
-        ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2025, 4, 14, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 4, 14, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="o3",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI o3 and o4-mini available",
-        summary=(
-            "o3 and o4-mini are now available on Azure OpenAI as of April 2025. "
-            "Set a new bar for math, science, coding, and visual reasoning tasks."
-        ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2025, 4, 16, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 4, 16, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-4o",
-        change_type=ChangeType.NEW_MODEL,
-        severity=Severity.INFO,
-        title="Azure OpenAI GPT-4o generally available",
-        summary=(
-            "gpt-4o is generally available on Azure OpenAI from May 2024. "
-            "Multimodal model supporting text and vision at improved speed and lower cost."
-        ),
-        source_url=_WHATS_NEW_URL,
-        announced_at=datetime(2024, 5, 13, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 5, 13, tzinfo=timezone.utc),
-        raw={"source": "seed"},
-    ),
-    # ── Retirements ────────────────────────────────────────────────────
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-35-turbo (0613)",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="Azure OpenAI gpt-35-turbo (0613) retired",
-        summary=(
-            "gpt-35-turbo version 0613 was retired on February 13, 2025. "
-            "Migrate to gpt-4o-mini for comparable performance at lower cost."
-        ),
-        source_url=_MODELS_URL,
-        announced_at=datetime(2024, 11, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2025, 2, 13, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "gpt-4o-mini"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-35-turbo (0301)",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="Azure OpenAI gpt-35-turbo (0301) retired",
-        summary=(
-            "gpt-35-turbo deployment version 0301 was retired on September 30, 2024. "
-            "Deployments should be upgraded to gpt-4o-mini."
-        ),
-        source_url=_MODELS_URL,
-        announced_at=datetime(2024, 7, 1, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 9, 30, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "gpt-4o-mini"},
-    ),
-    ModelUpdateCreate(
-        provider=Provider.azure,
-        product="azure_openai",
-        model="gpt-4 (0314)",
-        change_type=ChangeType.RETIREMENT,
-        severity=Severity.CRITICAL,
-        title="Azure OpenAI GPT-4 (0314) retired",
-        summary=(
-            "gpt-4 deployment version 0314 was retired on June 6, 2024. "
-            "Upgrade to gpt-4o or gpt-4.1."
-        ),
-        source_url=_MODELS_URL,
-        announced_at=datetime(2024, 4, 3, tzinfo=timezone.utc),
-        effective_at=datetime(2024, 6, 6, tzinfo=timezone.utc),
-        raw={"source": "seed", "replacement": "gpt-4o"},
-    ),
-]
