@@ -1,5 +1,5 @@
 /**
- * LLM Provider Update Feed – minimal client-side JS.
+ * AI Model Feed – minimal client-side JS.
  *
  * Handles the "Run collectors now" button without a full page reload
  * so the user gets immediate feedback before reloading the feed.

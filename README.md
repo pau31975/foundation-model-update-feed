@@ -237,7 +237,7 @@ All settings live in `app/config.py` as a `pydantic-settings` `BaseSettings` cla
 | `COLLECTOR_MAX_RETRIES` | `2` | Extra retry attempts (total = max_retries + 2) |
 | `DEFAULT_PAGE_LIMIT` | `50` | Default items per page |
 | `MAX_PAGE_LIMIT` | `200` | Maximum allowed limit |
-| `GEMINI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog]` URLs for Gemini |
+| `GEMINI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog, vertex-model-versions, vertex-release-notes]` URLs for Gemini and Vertex AI |
 | `OPENAI_SOURCE_URLS` | JSON array | `[deprecations, models, changelog]` URLs for OpenAI |
 | `ANTHROPIC_SOURCE_URLS` | JSON array | `[models, release-notes/api (unused), model-deprecations (unused)]` |
 | `AZURE_SOURCE_URLS` | JSON array | `[whats-new (foundry-classic), models, whats-new-legacy (unused)]` |
@@ -296,7 +296,7 @@ Duplicate inserts are silently ignored at the DB level (UNIQUE constraint).
 
 | Provider  | Status      | Source                                                |
 |-----------|-------------|-------------------------------------------------------|
-| Google    | ✅ Live + seed | `ai.google.dev/gemini-api/docs/deprecations`        |
+| Google    | ✅ Live + seed | `ai.google.dev/gemini-api/docs/deprecations`, `cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions`, `cloud.google.com/vertex-ai/generative-ai/docs/release-notes` |
 | OpenAI    | ✅ Live + seed | `platform.openai.com/docs/deprecations`             |
 | Anthropic | 🚧 Stub (TODO) | `docs.anthropic.com/en/docs/about-claude/models`   |
 | Azure     | 🚧 Stub (TODO) | `learn.microsoft.com/azure/ai-services/openai/…`   |

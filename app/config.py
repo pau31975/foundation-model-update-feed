@@ -39,6 +39,9 @@ class Settings(BaseSettings):
         "https://ai.google.dev/gemini-api/docs/deprecations",
         "https://ai.google.dev/gemini-api/docs/models",
         "https://ai.google.dev/gemini-api/docs/changelog",
+        # Vertex AI generative AI — model lifecycle and release notes
+        "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
+        "https://cloud.google.com/vertex-ai/generative-ai/docs/release-notes",
     ]
     openai_source_urls: list[str] = [
         # Canonical URL (platform.openai.com/docs/deprecations redirects here)

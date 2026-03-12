@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 _DEPRECATIONS_URL = settings.gemini_source_urls[0]
 _MODELS_URL = settings.gemini_source_urls[1]
 _CHANGELOG_URL = settings.gemini_source_urls[2]
+_VERTEX_MODEL_VERSIONS_URL = settings.gemini_source_urls[3]
+_VERTEX_RELEASE_NOTES_URL = settings.gemini_source_urls[4]
 _RSS_URL = settings.google_rss_url
 
 # Matches Gemini model identifiers within free text.
@@ -83,6 +85,8 @@ class GeminiCollector(BaseCollector):
         items.extend(self._collect_rss())
         items.extend(self._collect_deprecations())
         items.extend(self._collect_changelog())
+        items.extend(self._collect_vertex_model_versions())
+        items.extend(self._collect_vertex_release_notes())
 
         logger.info("[%s] collected %d item(s)", self.provider_name, len(items))
         return items
@@ -303,6 +307,216 @@ class GeminiCollector(BaseCollector):
                             )
                         except Exception as exc:
                             logger.debug("[%s] Skipping changelog item: %s", self.provider_name, exc)
+
+                sibling = sibling.next_sibling if sibling else None
+
+        return items
+
+    # ------------------------------------------------------------------
+    # Vertex AI — model versions / lifecycle
+    # ------------------------------------------------------------------
+
+    def _collect_vertex_model_versions(self) -> list[ModelUpdateCreate]:
+        """Parse the Vertex AI model versions page for lifecycle events.
+
+        The page lists Gemini model IDs available on Vertex AI alongside
+        their stable version period and deprecation / unavailability dates.
+        Only rows with at least a deprecation or retirement date are emitted.
+        """
+        html = self._fetch(_VERTEX_MODEL_VERSIONS_URL)
+        if not html:
+            return []
+
+        soup = BeautifulSoup(html, "html.parser")
+        items: list[ModelUpdateCreate] = []
+
+        for table in soup.find_all("table"):
+            headers = [th.get_text(strip=True).lower() for th in table.find_all("th")]
+            if not headers:
+                rows = table.find_all("tr")
+                if rows:
+                    headers = [
+                        td.get_text(strip=True).lower()
+                        for td in rows[0].find_all(["th", "td"])
+                    ]
+
+            col_map = self._map_columns(
+                headers,
+                {
+                    "model": ["model", "model id", "model version", "model name"],
+                    "deprecated": ["deprecated", "deprecation date", "deprecation"],
+                    "unavailable": [
+                        "unavailable", "end of life", "retirement", "discontinued",
+                        "shutdown", "eol",
+                    ],
+                    "replacement": ["replacement", "successor", "use instead", "recommended"],
+                },
+            )
+
+            if "model" not in col_map:
+                continue
+
+            for row in table.find_all("tr")[1:]:
+                cells = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
+                if not cells or len(cells) < 2:
+                    continue
+
+                model_name = self._get(cells, col_map.get("model"))
+                if not model_name:
+                    continue
+
+                deprecated_str = self._get(cells, col_map.get("deprecated"))
+                unavailable_str = self._get(cells, col_map.get("unavailable"))
+                replacement = self._get(cells, col_map.get("replacement"))
+
+                deprecated_date = _parse_date(deprecated_str) if deprecated_str else None
+                unavailable_date = _parse_date(unavailable_str) if unavailable_str else None
+
+                if unavailable_date:
+                    change_type = ChangeType.RETIREMENT
+                    severity = Severity.CRITICAL
+                    title = f"Vertex AI model '{model_name}' retirement"
+                    summary = (
+                        f"Vertex AI model '{model_name}' is scheduled for retirement"
+                        + (f" on {unavailable_str}" if unavailable_str else "")
+                        + (f". Recommended replacement: {replacement}" if replacement else "")
+                        + "."
+                    )
+                    announced_at = deprecated_date
+                    effective_at = unavailable_date
+                elif deprecated_date:
+                    change_type = ChangeType.DEPRECATION_ANNOUNCED
+                    severity = Severity.WARN
+                    title = f"Vertex AI model '{model_name}' deprecated"
+                    summary = (
+                        f"Vertex AI model '{model_name}' has been deprecated"
+                        + (f" as of {deprecated_str}" if deprecated_str else "")
+                        + (f". Recommended replacement: {replacement}" if replacement else "")
+                        + "."
+                    )
+                    announced_at = deprecated_date
+                    effective_at = None
+                else:
+                    # No lifecycle dates — skip informational-only rows
+                    continue
+
+                raw: dict[str, Any] = {
+                    "model": model_name,
+                    "deprecated": deprecated_str,
+                    "unavailable": unavailable_str,
+                    "replacement": replacement,
+                    "source": "vertex_model_versions",
+                }
+
+                try:
+                    items.append(
+                        ModelUpdateCreate(
+                            provider=Provider.google,
+                            product="vertex_ai",
+                            model=model_name,
+                            change_type=change_type,
+                            severity=severity,
+                            title=title,
+                            summary=summary,
+                            source_url=_VERTEX_MODEL_VERSIONS_URL,
+                            announced_at=announced_at,
+                            effective_at=effective_at,
+                            raw=raw,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] Skipping Vertex AI model versions row %r: %s",
+                        self.provider_name, cells, exc,
+                    )
+
+        return items
+
+    # ------------------------------------------------------------------
+    # Vertex AI — generative AI release notes
+    # ------------------------------------------------------------------
+
+    def _collect_vertex_release_notes(self) -> list[ModelUpdateCreate]:
+        """Best-effort parse of the Vertex AI generative AI release notes page.
+
+        The page is structured as monthly / daily h2-h3 headings followed by
+        bullet-point descriptions.  Only sections that mention a Gemini model
+        name are emitted.
+        """
+        html = self._fetch(_VERTEX_RELEASE_NOTES_URL)
+        if not html:
+            return []
+
+        soup = BeautifulSoup(html, "html.parser")
+        items: list[ModelUpdateCreate] = []
+
+        headings = soup.find_all(re.compile(r"^h[23]$"))
+        for heading in headings:
+            heading_text = heading.get_text(strip=True)
+            date = _parse_date(heading_text)
+
+            sibling = heading.next_sibling
+            while sibling and isinstance(sibling, Tag) and sibling.name not in ("h2", "h3"):
+                sibling_text = sibling.get_text(separator=" ", strip=True)
+
+                if not re.search(
+                    r"\b(gemini|vertex[\s-]?ai|model|launch|available|release|deprecat|retire)\b",
+                    sibling_text, re.IGNORECASE,
+                ):
+                    sibling = sibling.next_sibling if sibling else None
+                    continue
+
+                model_match = re.search(
+                    r"(gemini[-\s\d\.]+(?:pro|flash|ultra|nano|exp)?(?:[-\s]\d+(?:\.\d+)?(?:[-\s]\w+)?)?)",
+                    sibling_text, re.IGNORECASE,
+                )
+                model_name = model_match.group(1).strip() if model_match else None
+
+                if re.search(
+                    r"\b(deprecat|retire|shutdown|sunset|end.of.?life)\b",
+                    sibling_text, re.IGNORECASE,
+                ):
+                    change_type = ChangeType.DEPRECATION_ANNOUNCED
+                    severity = Severity.WARN
+                elif _RSS_RELEASE_RE.search(sibling_text) or (
+                    model_name and _RSS_MODEL_VERSION_RE.search(model_name)
+                ):
+                    change_type = ChangeType.NEW_MODEL
+                    severity = Severity.INFO
+                else:
+                    change_type = ChangeType.CAPABILITY_CHANGED
+                    severity = Severity.INFO
+
+                if model_name and len(sibling_text) > 20:
+                    try:
+                        items.append(
+                            ModelUpdateCreate(
+                                provider=Provider.google,
+                                product="vertex_ai",
+                                model=model_name,
+                                change_type=change_type,
+                                severity=severity,
+                                title=(
+                                    f"Vertex AI release: {model_name}"
+                                    if change_type == ChangeType.NEW_MODEL
+                                    else f"Vertex AI update: {sibling_text[:80]}"
+                                )[:256],
+                                summary=sibling_text[:512],
+                                source_url=_VERTEX_RELEASE_NOTES_URL,
+                                announced_at=date,
+                                effective_at=date if change_type == ChangeType.NEW_MODEL else None,
+                                raw={
+                                    "heading": heading_text,
+                                    "snippet": sibling_text[:256],
+                                    "source": "vertex_release_notes",
+                                },
+                            )
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "[%s] Skipping Vertex AI release notes item: %s",
+                            self.provider_name, exc,
+                        )
 
                 sibling = sibling.next_sibling if sibling else None
 

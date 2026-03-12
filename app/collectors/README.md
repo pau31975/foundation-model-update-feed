@@ -22,7 +22,7 @@ Collectors are responsible for fetching, parsing, and returning structured model
 
 | Provider | Data source(s) | Seed fallback? |
 |---|---|---|
-| Google Gemini | `blog.google/products/gemini/rss/` (RSS), `ai.google.dev/gemini-api/docs/deprecations`, `ai.google.dev/gemini-api/docs/changelog` | No |
+| Google Gemini | `blog.google/products/gemini/rss/` (RSS), `ai.google.dev/gemini-api/docs/deprecations`, `ai.google.dev/gemini-api/docs/changelog`, `cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions`, `cloud.google.com/vertex-ai/generative-ai/docs/release-notes` | No |
 | OpenAI | `openai.com/blog/rss.xml` (RSS), `developers.openai.com/api/docs/deprecations`, `developers.openai.com/api/docs/changelog` | No |
 | Anthropic | `platform.claude.com/docs/en/about-claude/models/all-models`, `platform.claude.com/docs/en/release-notes/overview` (`_collect_changelog`), `model-deprecations` (defined, not scraped) | No |
 | Azure OpenAI | `…/azure/foundry-classic/openai/whats-new` (new), `…/azure/ai-services/openai/concepts/models`, legacy whats-new (defined, not scraped) | Yes — always appended |
@@ -64,6 +64,8 @@ Scrapes the Google Gemini blog RSS feed and two documentation pages.
 | `blog.google/products/gemini/rss/` | RSS feed — new model announcements and product updates |
 | `ai.google.dev/gemini-api/docs/deprecations` | HTML table of deprecated/retired models with dates and replacements |
 | `ai.google.dev/gemini-api/docs/changelog` | Dated changelog entries that mention new or changed models |
+| `cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions` | HTML table of Vertex AI model versions with deprecation and retirement dates |
+| `cloud.google.com/vertex-ai/generative-ai/docs/release-notes` | Dated release notes for Vertex AI generative AI — new models and capability changes |
 
 ### Parsing strategy — deprecations page
 
@@ -92,6 +94,24 @@ Scrapes the Google Gemini blog RSS feed and two documentation pages.
    - Everything else → `CAPABILITY_CHANGED` / `INFO`.
 
 `_RSS_MODEL_VERSION_RE` catches Google's common blog title pattern for model launches that don't use explicit release verbs.
+
+### Parsing strategy — Vertex AI model versions page
+
+1. Fetch and parse HTML with `BeautifulSoup`.
+2. Find all `<table>` elements and skip any without a `model` column.
+3. For each row, read model name, deprecation date, and unavailability/retirement date.
+4. Classify:
+   - Unavailability date present → `ChangeType.RETIREMENT` / `Severity.CRITICAL` (product `vertex_ai`)
+   - Deprecation date only → `ChangeType.DEPRECATION_ANNOUNCED` / `Severity.WARN` (product `vertex_ai`)
+   - Neither date → row skipped (informational only)
+
+### Parsing strategy — Vertex AI release notes page
+
+1. Walk all `<h2>` / `<h3>` headings; try to parse each as a date.
+2. For headed sections, scan following sibling elements for text containing Gemini model or Vertex AI keywords.
+3. Extract Gemini model names with a regex.
+4. Classify using the same keyword heuristics as the RSS feed (`deprecat`/`retire` → `DEPRECATION_ANNOUNCED`; explicit release verbs or model version pattern → `NEW_MODEL`; otherwise `CAPABILITY_CHANGED`).
+5. Emitted items use product `vertex_ai`.
 
 ### `_parse_date` helper
 
