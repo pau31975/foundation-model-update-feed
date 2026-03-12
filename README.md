@@ -1,4 +1,4 @@
-# Foundation Model Update Feed
+# AI Model Update Feed
 
 A FastAPI service that scrapes and aggregates **model lifecycle events** — new models, deprecations, retirements, and capability changes — from five major AI providers. Events are stored in SQLite with SHA-256 deduplication and exposed via a REST API and a server-rendered web UI.
 
